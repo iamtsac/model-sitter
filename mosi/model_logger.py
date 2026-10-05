@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Union, Sequence, Callable
 
 from .checkpointing import CheckpointManager, Backend
-from .groups import resolve_run_dir, update_manifest
+from .groups import resolve_run_dir, write_run_info
 from .logger_config import LoggerConfig
 from .experiment_manager import ExperimentEnvironment, HistoryManager
 from .artifact_manager import ArtifactManager
@@ -41,10 +41,10 @@ class ModelLogger:
     Internal State Matrix:
         - Safe Start (False, False, False): Creates a timestamped folder and a new WandB run.
         - Recovery (False, True, False): Re-attaches to 'fpath', loads weights/stats, 
-            truncates 'stats.yaml' to remove post-checkpoint data, branches the WandB 
+            truncates 'stats.jsonl' to remove post-checkpoint data, branches the WandB 
             run with a lineage-tracking name, and replays history into the new run.
         - Hard Reset (True, True, False): Loads weights from 'fpath', but deletes ALL 
-            previous WandB runs in the lineage and wipes local 'stats.yaml' history.
+            previous WandB runs in the lineage and wipes local 'stats.jsonl' history.
         - Evaluation (False, False, True): Static access to 'fpath' for weight loading; 
             no logging or directory mutation.
 
@@ -87,7 +87,7 @@ class ModelLogger:
         self.checkpointer = CheckpointManager(self.env.fpath, self.logger, checkpoint_backend, keep_last)
 
         if self.group_dir is not None and not self.env.eval_mode:
-            update_manifest(self.group_dir, group, self.name, job_type=job_type, tags=list(tags) or None)
+            write_run_info(self.env.fpath, group, self.name, job_type=job_type, tags=list(tags) or None)
 
         self.telemetry = None
         if not self.env.eval_mode and use_wandb:

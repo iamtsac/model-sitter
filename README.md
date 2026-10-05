@@ -106,8 +106,7 @@ stats = load_group_stats("runs/seeds_run")  # {"test_s0": [rows...], "test_s1": 
 ```
 
 ```
-runs/seeds_run/group.json                   members of the group
-runs/seeds_run/test_s0/   test_s1/   test_s2/
+runs/seeds_run/test_s0/   test_s1/   test_s2/     each has a run.json naming its group
 ```
 
 In W&B: group by *Group* to compare seeds, filter on `job_type`, `tags` or `config.seed`.

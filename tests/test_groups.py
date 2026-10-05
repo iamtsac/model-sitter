@@ -1,7 +1,7 @@
 import json
 import pytest
 from conftest import Stateful
-from mosi import ModelLogger, load_group_stats
+from mosi import ModelLogger, load_group_stats, list_group_runs
 
 YES = lambda msg: True
 
@@ -16,8 +16,9 @@ def test_grouped_layout_and_manifest(tmp_path):
     b = ModelLogger(tmp_path, group="seeds_run", name="test_s1")
     assert a.env.fpath == tmp_path / "seeds_run" / "test_s0"
     assert b.env.fpath == tmp_path / "seeds_run" / "test_s1"
-    runs = json.loads((tmp_path / "seeds_run" / "group.json").read_text())["runs"]
+    runs = list_group_runs(tmp_path / "seeds_run")
     assert set(runs) == {"test_s0", "test_s1"} and runs["test_s0"]["tags"] == ["x"]
+    assert not (tmp_path / "seeds_run" / "group.json").exists()
 
 
 @pytest.mark.parametrize("group,name", [("../x", "a"), ("g", "a/b"), ("g", "..")])

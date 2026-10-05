@@ -4,7 +4,7 @@ import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-MANIFEST = "group.json"
+RUN_INFO = "run.json"
 
 
 def resolve_run_dir(fpath: Union[str, Path], group: Optional[str], name: Optional[str]) -> Path:
@@ -20,26 +20,44 @@ def resolve_run_dir(fpath: Union[str, Path], group: Optional[str], name: Optiona
     return fpath / group / name
 
 
-def update_manifest(group_dir: Path, group: str, run: str, **info: Any) -> None:
-    """Records `run` as a member of the group (idempotent, one small json per group)."""
-    group_dir.mkdir(parents=True, exist_ok=True)
-    path = group_dir / MANIFEST
+def write_run_info(run_dir: Path, group: str, run: str, **info: Any) -> None:
+    """Marks `run_dir` as a member of `group` via its own `run.json`.
+
+    Each run only ever writes its own file, so runs of a group can start in parallel without racing
+    on a shared manifest."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path = run_dir / RUN_INFO
     data = json.loads(path.read_text()) if path.exists() else {
-        "group": group, "created": datetime.datetime.now().isoformat(timespec="seconds"), "runs": {}}
-    data["runs"].setdefault(run, {}).update({k: v for k, v in info.items() if v is not None})
+        "group": group, "name": run, "created": datetime.datetime.now().isoformat(timespec="seconds")}
+    data.update({k: v for k, v in info.items() if v is not None})
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2))
     tmp.replace(path)
 
 
-def load_group_stats(group_dir: Union[str, Path]) -> Dict[str, List[dict]]:
-    """`{run_name: [stats rows]}` for the runs registered in the group (archived re-runs are skipped)."""
+def list_group_runs(group_dir: Union[str, Path]) -> Dict[str, dict]:
+    """`{run_name: run.json contents}` for the runs of the group. Archived re-runs (folder renamed to
+    `<name>_<timestamp>`, so it no longer matches the recorded name) are skipped."""
     group_dir = Path(group_dir)
-    manifest = group_dir / MANIFEST
-    if not manifest.exists():
-        raise FileNotFoundError(f"{group_dir} is not a group directory (no {MANIFEST})")
+    runs: Dict[str, dict] = {}
+    for info_file in sorted(group_dir.glob(f"*/{RUN_INFO}")):
+        try:
+            info = json.loads(info_file.read_text())
+        except (OSError, ValueError):
+            continue
+        if info.get("name") == info_file.parent.name:
+            runs[info["name"]] = info
+    return runs
+
+
+def load_group_stats(group_dir: Union[str, Path]) -> Dict[str, List[dict]]:
+    """`{run_name: [stats rows]}` for the runs of the group."""
+    group_dir = Path(group_dir)
+    runs = list_group_runs(group_dir)
+    if not runs:
+        raise FileNotFoundError(f"{group_dir} is not a group directory (no run folders with {RUN_INFO})")
     out: Dict[str, List[dict]] = {}
-    for run in json.loads(manifest.read_text())["runs"]:
+    for run in runs:
         stats = group_dir / run / "stats.jsonl"
         out[run] = [json.loads(l) for l in stats.read_text().splitlines() if l.strip()] if stats.exists() else []
     return out
