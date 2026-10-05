@@ -26,15 +26,15 @@ Every example below is a runnable script in [`examples/`](examples/).
 ## Quickstart
 
 ```python
-from mosi import ModelLogger
+from mosi import Sitter
 
-with ModelLogger("runs/mnist") as log:            # `with` flushes stats and closes W&B at the end
-    log.add_config(lr=1e-3, batch_size=64)
+with Sitter("runs/mnist") as sitter:            # `with` flushes stats and closes W&B at the end
+    sitter.add_config(lr=1e-3, batch_size=64)
     for epoch in range(10):
         loss, acc = train_one_epoch()
-        log.add_stats(loss=loss, val={"acc": acc})  # nested dicts become "val/acc"
-        log.checkpoint(model=model, optimizer=opt)  # anything with state_dict()
-        log.step()                                  # writes the row for this step (and logs to W&B)
+        sitter.add_stats(loss=loss, val={"acc": acc})  # nested dicts become "val/acc"
+        sitter.checkpoint(model=model, optimizer=opt)  # anything with state_dict()
+        sitter.step()                                  # writes the row for this step (and logs to W&B)
 ```
 
 Call order inside a step: `add_stats` / `add_image` / ... / `checkpoint` / `step()`. The step counter
@@ -49,16 +49,16 @@ class Params:                       # state_dict / load_state_dict is all a chec
     def state_dict(self): return {"w": w, "b": b}
     def load_state_dict(self, d): w[...], b[...] = d["w"], d["b"]
 
-with ModelLogger("runs/basic", checkpoint_backend="pickle", keep_last=3) as log:
-    log.add_config(lr=0.1, steps=50)
+with Sitter("runs/basic", checkpoint_backend="pickle", keep_last=3) as sitter:
+    sitter.add_config(lr=0.1, steps=50)
     for step in range(50):
         ...
-        log.add_stats(loss=float((err ** 2).mean()))
-        log.checkpoint(params=Params())
-        log.step()
+        sitter.add_stats(loss=float((err ** 2).mean()))
+        sitter.checkpoint(params=Params())
+        sitter.step()
 
-with ModelLogger("runs/basic", eval_mode=True, checkpoint_backend="pickle") as log:
-    log.load_checkpoint("latest", params=Params())      # restored in place
+with Sitter("runs/basic", eval_mode=True, checkpoint_backend="pickle") as sitter:
+    sitter.load_checkpoint("latest", params=Params())      # restored in place
 ```
 
 ### 2. PyTorch, with resume ([02_torch_resume.py](examples/02_torch_resume.py))
@@ -66,13 +66,13 @@ with ModelLogger("runs/basic", eval_mode=True, checkpoint_backend="pickle") as l
 Model, optimizer, scheduler and EMA are just named keyword arguments, there are no predefined slots:
 
 ```python
-log = ModelLogger("runs/torch", resume=True)
-start = log.load_checkpoint("latest", model=model, optimizer=opt, lr_scheduler=sched, ema=ema)["step"]
+sitter = Sitter("runs/torch", resume=True)
+start = sitter.load_checkpoint("latest", model=model, optimizer=opt, lr_scheduler=sched, ema=ema)["step"]
 for step in range(start, total):
     ...
-    log.add_stats(loss=loss)                    # tensors are fine, they become floats
-    log.checkpoint(model=model, optimizer=opt, lr_scheduler=sched, ema=ema)
-    log.step()
+    sitter.add_stats(loss=loss)                    # tensors are fine, they become floats
+    sitter.checkpoint(model=model, optimizer=opt, lr_scheduler=sched, ema=ema)
+    sitter.step()
 ```
 
 `resume=True` truncates `stats.jsonl` to the checkpoint's step and continues counting from there.
@@ -82,12 +82,12 @@ for step in range(start, total):
 Pytrees and arrays are stored as they are and come back in the returned dict:
 
 ```python
-with ModelLogger("runs/jax", checkpoint_backend="pickle") as log:
+with Sitter("runs/jax", checkpoint_backend="pickle") as sitter:
     ...
-    log.add_stats(loss=loss)                                # jax scalars are fine
-    log.checkpoint(params=params, opt_state=opt_state)
+    sitter.add_stats(loss=loss)                                # jax scalars are fine
+    sitter.checkpoint(params=params, opt_state=opt_state)
 
-out = ModelLogger("runs/jax", eval_mode=True, checkpoint_backend="pickle").load_checkpoint("latest")
+out = Sitter("runs/jax", eval_mode=True, checkpoint_backend="pickle").load_checkpoint("latest")
 params, opt_state = out["params"], out["opt_state"]
 ```
 
@@ -97,10 +97,10 @@ Use `checkpoint_backend="pickle"` explicitly in jax / sklearn projects: `"auto"`
 
 ```python
 for seed in range(3):
-    with ModelLogger("runs", group="seeds_run", name=f"test_s{seed}",
-                     job_type="train", tags=["baseline"], use_wandb=True) as log:
-        log.add_config(seed=seed)           # put the seed in the config to filter on it in W&B
-        train(log, seed)
+    with Sitter("runs", group="seeds_run", name=f"test_s{seed}",
+                     job_type="train", tags=["baseline"], use_wandb=True) as sitter:
+        sitter.add_config(seed=seed)           # put the seed in the config to filter on it in W&B
+        train(sitter, seed)
 
 from mosi import load_group_stats
 stats = load_group_stats("runs/seeds_run")  # {"test_s0": [rows...], "test_s1": [...], ...}
@@ -117,15 +117,15 @@ only touches the run being re-created, never its siblings.
 ### 5. Early stopping ([05_early_stopping.py](examples/05_early_stopping.py))
 
 ```python
-log.enable_monitor(decrease_keys=["val/loss"], patience=3, log_every=5)
+sitter.enable_monitor(decrease_keys=["val/loss"], patience=3, log_every=5)
 for step in ...:
-    log.add_stats(val={"loss": val_loss})
-    log.checkpoint(model=model)            # metrics default to the stats staged for this step
-    log.step()
-    if log.should_stop:                    # patience ran out; the monitor never stops training itself
+    sitter.add_stats(val={"loss": val_loss})
+    sitter.checkpoint(model=model)            # metrics default to the stats staged for this step
+    sitter.step()
+    if sitter.should_stop:                    # patience ran out; the monitor never stops training itself
         break
 
-log.load_checkpoint("best", model=model)   # best_model/ is kept up to date and never pruned
+sitter.load_checkpoint("best", model=model)   # best_model/ is kept up to date and never pruned
 ```
 
 `increase_keys` / `decrease_keys` take a list or a nested dict (`{"val": ["acc", "f1"]}`). Several keys are
@@ -134,7 +134,7 @@ combined as the sum of relative improvements. `tolerance` controls the "catastro
 ### 6. Weights & Biases
 
 ```python
-ModelLogger("runs/exp", use_wandb=True, project="my-project")   # or export WANDB_PROJECT=my-project
+Sitter("runs/exp", use_wandb=True, project="my-project")   # or export WANDB_PROJECT=my-project
 ```
 
 | you pass | local folder | W&B |
@@ -150,18 +150,18 @@ Each logger holds its own W&B run handle, but `wandb` itself allows one active r
 
 ### 7. CLI with tyro ([06_tyro_cli.py](examples/06_tyro_cli.py))
 
-`LoggerConfig` is a plain dataclass, so it nests in your own config and works with tyro (or any dataclass
+`SitterConfig` is a plain dataclass, so it nests in your own config and works with tyro (or any dataclass
 CLI) without model-sitter depending on it:
 
 ```python
 @dataclass
 class Config:
     lr: float = 1e-3
-    logger: LoggerConfig = field(default_factory=LoggerConfig)
+    logger: SitterConfig = field(default_factory=SitterConfig)
 
 cfg = tyro.cli(Config)       # --logger.group seeds_run --logger.name test_s0 --logger.use-wandb
-with cfg.logger.build() as log:      # or ModelLogger.from_config(cfg.logger, confirm=...)
-    log.add_config(cfg)              # lossless YAML of the whole config
+with cfg.logger.build() as sitter:      # or Sitter.from_config(cfg.logger, confirm=...)
+    sitter.add_config(cfg)              # lossless YAML of the whole config
 ```
 
 `load_config("config.yaml")` rebuilds the config objects. Config classes must live in an importable module
@@ -172,10 +172,10 @@ with cfg.logger.build() as log:      # or ModelLogger.from_config(cfg.logger, co
 ### 8. Images, videos and tables ([07_artifacts.py](examples/07_artifacts.py))
 
 ```python
-log.add_image("sample.png", pil_image)             # anything with .save(path); plots: .savefig(path)
-log.add_plot("curve.png", matplotlib_figure)       # saved under images/ too, logged to W&B as a plot
-log.add_video("rollout", frames_uint8_THWC, fps=15)    # needs model-sitter[media]; or pass an .mp4 path
-log.add_analysis("weights", {"idx": [0, 1], "val": [0.1, 0.2]})   # CSV (+ W&B table)
+sitter.add_image("sample.png", pil_image)             # anything with .save(path); plots: .savefig(path)
+sitter.add_plot("curve.png", matplotlib_figure)       # saved under images/ too, logged to W&B as a plot
+sitter.add_video("rollout", frames_uint8_THWC, fps=15)    # needs model-sitter[media]; or pass an .mp4 path
+sitter.add_analysis("weights", {"idx": [0, 1], "val": [0.1, 0.2]})   # CSV (+ W&B table)
 ```
 
 ## On disk
@@ -196,7 +196,7 @@ runs/seeds_run/test_s0/
 
 ## Checkpoints in detail
 
-`log.checkpoint(**named_things)` stores, per name:
+`sitter.checkpoint(**named_things)` stores, per name:
 
 | value | stored as | on `load_checkpoint(step, name=obj)` |
 |---|---|---|
@@ -217,20 +217,20 @@ object with `suffix`, `save(obj, path)` and `load(path, like)` (e.g. orbax / saf
 
 | | |
 |---|---|
-| `ModelLogger(fpath, overwrite=False, resume=False, eval_mode=False, use_wandb=False, *, group, name, job_type, tags, notes, project, checkpoint_backend, keep_last, confirm, log_level)` | the logger, also a context manager |
+| `Sitter(fpath, overwrite=False, resume=False, eval_mode=False, use_wandb=False, *, group, name, job_type, tags, notes, project, checkpoint_backend, keep_last, confirm, log_level)` | the main object, also a context manager |
 | `.add_stats(**stats)`, `.step(step=None)`, `.finish()` | per-step stats |
 | `.add_config(obj=None, **values)` | `config.yaml` + W&B config |
 | `.checkpoint(metrics=None, **named)`, `.load_checkpoint(step, **named)` | checkpoints |
 | `.enable_monitor(increase_keys, decrease_keys, tolerance, patience, log_every)`, `.should_stop` | best model + early stop |
 | `.add_image / add_plot / add_video / add_analysis` | artifacts |
-| `LoggerConfig`, `ModelLogger.from_config(cfg)` | CLI friendly config |
+| `SitterConfig`, `Sitter.from_config(cfg)` | CLI friendly config |
 | `load_group_stats(group_dir)` | stats of every run in a group |
 | `dump_config(obj)`, `load_config(path)` | lossless YAML |
 
 ## Good to know
 
 - Pickle (and torch with `weights_only=False`) checkpoints run code on load: only load files you trust. The same goes for `load_config`.
-- The monitor never stops training by itself, check `log.should_stop`.
+- The monitor never stops training by itself, check `sitter.should_stop`.
 - `add_stats` values must be scalars (python / numpy / torch / jax); NaN and inf are stored as `null`.
 - The logger is not thread or multi-process safe: log from one process (e.g. rank 0).
 

@@ -1,6 +1,6 @@
 import dataclasses
 import pytest
-from mosi import ModelLogger, LoggerConfig, dump_config, load_config
+from mosi import Sitter, SitterConfig, dump_config, load_config
 from conftest import Stateful
 
 
@@ -11,11 +11,11 @@ class Img:
 @dataclasses.dataclass
 class Config:  # module level so dump_config can import it back
     lr: float = 1e-3
-    logger: LoggerConfig = dataclasses.field(default_factory=LoggerConfig)
+    logger: SitterConfig = dataclasses.field(default_factory=SitterConfig)
 
 
 def test_keep_last_prunes_old_but_keeps_best(tmp_path):
-    log = ModelLogger(tmp_path / "r", checkpoint_backend="pickle", keep_last=2)
+    log = Sitter(tmp_path / "r", checkpoint_backend="pickle", keep_last=2)
     log.enable_monitor(decrease_keys=["loss"])
     for loss in (1.0, 5.0, 6.0, 7.0, 8.0):
         log.checkpoint(metrics={"loss": loss}, model=Stateful(1)); log.step()
@@ -26,11 +26,11 @@ def test_keep_last_prunes_old_but_keeps_best(tmp_path):
 
 def test_keep_last_validation(tmp_path):
     with pytest.raises(ValueError):
-        ModelLogger(tmp_path / "r", keep_last=0)
+        Sitter(tmp_path / "r", keep_last=0)
 
 
 def test_artifacts_split_into_folders(tmp_path):
-    log = ModelLogger(tmp_path / "r")
+    log = Sitter(tmp_path / "r")
     log.step(7)
     log.add_image("a.png", Img())
     log.add_video("v", str(tmp_path / "none.mp4"))  # missing file: logged as error, no crash
@@ -42,15 +42,15 @@ def test_artifacts_split_into_folders(tmp_path):
 
 
 def test_eval_mode_artifacts_stay_in_evaluation_dir(tmp_path):
-    ModelLogger(tmp_path / "r").finish()
-    log = ModelLogger(tmp_path / "r", eval_mode=True)
+    Sitter(tmp_path / "r").finish()
+    log = Sitter(tmp_path / "r", eval_mode=True)
     log.add_image("a.png", Img())
     assert (tmp_path / "r" / "evaluation" / "images" / "step_1" / "a.png").exists()
 
 
 def test_monitor_is_quiet_without_improvement(tmp_path, caplog):
     import logging
-    log = ModelLogger(tmp_path / "r", checkpoint_backend="pickle")
+    log = Sitter(tmp_path / "r", checkpoint_backend="pickle")
     log.enable_monitor(decrease_keys=["loss"])
     log.logger.addHandler(caplog.handler)
     with caplog.at_level(logging.INFO, logger=log.logger.name):
@@ -61,16 +61,16 @@ def test_monitor_is_quiet_without_improvement(tmp_path, caplog):
     assert not any("Net Relative" in m for m in msgs)
 
 
-def test_logger_config_builds_logger_and_roundtrips_yaml(tmp_path):
-    cfg = LoggerConfig(fpath=str(tmp_path), group="g", name="n", tags=("a", "b"), keep_last=3, checkpoint_backend="pickle")
-    log = ModelLogger.from_config(cfg)
+def test_sitter_config_builds_logger_and_roundtrips_yaml(tmp_path):
+    cfg = SitterConfig(fpath=str(tmp_path), group="g", name="n", tags=("a", "b"), keep_last=3, checkpoint_backend="pickle")
+    log = Sitter.from_config(cfg)
     assert log.env.fpath == tmp_path / "g" / "n" and log.checkpointer.keep_last == 3
     out = tmp_path / "cfg.yaml"
     out.write_text(dump_config(cfg))
     assert load_config(out) == cfg
 
 
-def test_logger_config_works_with_tyro(tmp_path):
+def test_sitter_config_works_with_tyro(tmp_path):
     tyro = pytest.importorskip("tyro")
     cfg = tyro.cli(Config, args=["--lr", "0.5", "--logger.group", "g", "--logger.name", "n",
                                  "--logger.tags", "x", "y", "--logger.keep-last", "2", "--logger.fpath", str(tmp_path)])

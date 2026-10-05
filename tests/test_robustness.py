@@ -3,7 +3,7 @@ import dataclasses
 import numpy as np
 import pytest
 from conftest import Stateful
-from mosi import ModelLogger, PickleBackend, load_config
+from mosi import Sitter, PickleBackend, load_config
 
 
 @dataclasses.dataclass
@@ -12,7 +12,7 @@ class Cfg:
 
 
 def make(tmp_path, **kw):
-    return ModelLogger(tmp_path / "r", checkpoint_backend="pickle", **kw)
+    return Sitter(tmp_path / "r", checkpoint_backend="pickle", **kw)
 
 
 @pytest.mark.parametrize("order", ["obj_first", "dict_first"])
@@ -29,7 +29,7 @@ def test_add_config_single_kind_stays_plain(tmp_path):
     log = make(tmp_path)
     log.add_config(seed=3)
     assert load_config(tmp_path / "r" / "config.yaml") == {"seed": 3}
-    log = ModelLogger(tmp_path / "o", checkpoint_backend="pickle")
+    log = Sitter(tmp_path / "o", checkpoint_backend="pickle")
     log.add_config(Cfg())
     assert load_config(tmp_path / "o" / "config.yaml") == Cfg()
 
@@ -39,7 +39,7 @@ def test_failed_save_leaves_no_partial_checkpoint(tmp_path):
         def save(self, obj, path):
             path.write_bytes(b"half")
             raise RuntimeError("disk full")
-    log = ModelLogger(tmp_path / "r", checkpoint_backend=Boom())
+    log = Sitter(tmp_path / "r", checkpoint_backend=Boom())
     with pytest.raises(RuntimeError):
         log.checkpoint(model=Stateful(1))
     assert not list((tmp_path / "r" / "checkpoint_1").glob("checkpoint.*"))

@@ -2,19 +2,48 @@ import sys
 import dataclasses
 import logging
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Union, Sequence, Callable
+from typing import Optional, List, Dict, Any, Union, Sequence, Callable, Tuple
 
 from .checkpointing import CheckpointManager, Backend
 from .environment import write_environment
 from .groups import resolve_run_dir, write_run_info
-from .logger_config import LoggerConfig
 from .experiment_manager import ExperimentEnvironment, HistoryManager
 from .artifact_manager import ArtifactManager
 from .model_monitor import _ModelMonitor
 
-class ModelLogger:
+
+@dataclasses.dataclass
+class SitterConfig:
+    """Plain, CLI-friendly description of a `Sitter` (a dataclass, so tyro/argparse-style tools,
+    `dump_config` and W&B configs all handle it without extra dependencies)."""
+
+    fpath: str = "runs"
+    """Root directory. With `group` the run lives in `<fpath>/<group>/<name>`."""
+    group: Optional[str] = None
+    """Groups related runs, also the W&B group."""
+    name: Optional[str] = None
+    """Run name inside the group, also the W&B run name."""
+    job_type: Optional[str] = None
+    tags: Tuple[str, ...] = ()
+    notes: Optional[str] = None
+    project: Optional[str] = None
+    """W&B project (falls back to $WANDB_PROJECT)."""
+    use_wandb: bool = False
+    overwrite: bool = False
+    resume: bool = False
+    eval_mode: bool = False
+    keep_last: Optional[int] = None
+    """Keep only the newest N checkpoints (best_model is always kept)."""
+    checkpoint_backend: str = "auto"
+    """auto, torch or pickle."""
+
+    def build(self, **kwargs) -> "Sitter":
+        return Sitter(**{**dataclasses.asdict(self), **kwargs})
+
+
+class Sitter:
     """
-    Initializes the ModelLogger for experiment tracking, checkpointing, and cloud synchronization.
+    Initializes the Sitter for experiment tracking, checkpointing, and cloud synchronization.
 
     The logger manages a state machine via 'resume', 'overwrite', and 'eval_mode' to ensure
     local and remote (WandB) data consistency.
@@ -128,7 +157,7 @@ class ModelLogger:
                 h.close()
                 self.logger.removeHandler(h)
 
-    def __enter__(self) -> "ModelLogger":
+    def __enter__(self) -> "Sitter":
         return self
 
     def __exit__(self, *exc) -> None:
@@ -233,8 +262,8 @@ class ModelLogger:
         if self.telemetry: self.telemetry.log_table(name, data, self._step)
 
     @classmethod
-    def from_config(cls, cfg: "LoggerConfig", **kwargs) -> "ModelLogger":
-        """Builds the logger from a `LoggerConfig` (e.g. one parsed by tyro); `kwargs` add non-CLI args like `confirm`."""
+    def from_config(cls, cfg: "SitterConfig", **kwargs) -> "Sitter":
+        """Builds the Sitter from a `SitterConfig` (e.g. one parsed by tyro); `kwargs` add non-CLI args like `confirm`."""
         return cfg.build(**kwargs)
 
     def _setup_logging(self, name: str, level: Union[int, str] = "INFO") -> None:

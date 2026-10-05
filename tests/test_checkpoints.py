@@ -1,6 +1,6 @@
 import sys
 import pytest
-from mosi import ModelLogger, PickleBackend
+from mosi import Sitter, PickleBackend
 from conftest import Stateful
 
 
@@ -11,7 +11,7 @@ def test_core_import_needs_no_torch_or_wandb():
 
 
 def test_pickle_roundtrip_and_best(tmp_path):
-    log = ModelLogger(tmp_path / "r", checkpoint_backend="pickle")
+    log = Sitter(tmp_path / "r", checkpoint_backend="pickle")
     log.enable_monitor(decrease_keys=["loss"])
     m, opts = Stateful(1), [Stateful(10), Stateful(20)]
     log.add_stats(loss=2.0); log.checkpoint(metrics={"loss": 2.0}, model=m, optimizer=opts); log.step()
@@ -20,7 +20,7 @@ def test_pickle_roundtrip_and_best(tmp_path):
     assert (tmp_path / "r" / "checkpoint_1" / "checkpoint.pkl").exists()
     assert (tmp_path / "r" / "best_model" / "checkpoint.pkl").exists()
 
-    fresh = ModelLogger(tmp_path / "r", eval_mode=True, checkpoint_backend="pickle")
+    fresh = Sitter(tmp_path / "r", eval_mode=True, checkpoint_backend="pickle")
     m2, opts2 = Stateful(), [Stateful(), Stateful()]
     cp = fresh.load_checkpoint(1, model=m2, optimizer=opts2)
     assert (m2.v, opts2[1].v, cp["step"]) == (1, 20, 1)
@@ -30,9 +30,9 @@ def test_pickle_roundtrip_and_best(tmp_path):
 
 def test_missing_checkpoint_errors(tmp_path):
     with pytest.raises(FileNotFoundError):   # eval_mode never creates a run
-        ModelLogger(tmp_path / "missing", eval_mode=True)
+        Sitter(tmp_path / "missing", eval_mode=True)
     (tmp_path / "r").mkdir()
-    log = ModelLogger(tmp_path / "r", eval_mode=True, checkpoint_backend="pickle")
+    log = Sitter(tmp_path / "r", eval_mode=True, checkpoint_backend="pickle")
     with pytest.raises(FileNotFoundError):
         log.load_checkpoint(5, model=Stateful())
     with pytest.raises(FileNotFoundError):
@@ -42,7 +42,7 @@ def test_missing_checkpoint_errors(tmp_path):
 def test_custom_backend(tmp_path):
     class Json(PickleBackend):
         suffix = "pkl"
-    log = ModelLogger(tmp_path / "r", checkpoint_backend=Json())
+    log = Sitter(tmp_path / "r", checkpoint_backend=Json())
     log.checkpoint(model=Stateful(3))
     m = Stateful()
     log.load_checkpoint(1, model=m)
@@ -53,18 +53,18 @@ def test_torch_backend(tmp_path):
     torch = pytest.importorskip("torch")
     net = torch.nn.Linear(3, 2)
     opt = torch.optim.SGD(net.parameters(), lr=0.1)
-    log = ModelLogger(tmp_path / "r")  # auto -> torch
+    log = Sitter(tmp_path / "r")  # auto -> torch
     log.checkpoint(model=net, optimizer=opt)
     assert (tmp_path / "r" / "checkpoint_1" / "checkpoint.pt").exists()
     net2 = torch.nn.Linear(3, 2)
-    ModelLogger(tmp_path / "r", eval_mode=True).load_checkpoint(1, model=net2, optimizer=torch.optim.SGD(net2.parameters(), lr=0.1))
+    Sitter(tmp_path / "r", eval_mode=True).load_checkpoint(1, model=net2, optimizer=torch.optim.SGD(net2.parameters(), lr=0.1))
     assert torch.equal(net.weight, net2.weight)
 
 
 def test_config_roundtrip(tmp_path):
     import dataclasses
     from mosi import load_config
-    log = ModelLogger(tmp_path / "r")
+    log = Sitter(tmp_path / "r")
     log.add_config(lr=1e-3, shape=(2, 3))
     cfg = load_config(tmp_path / "r" / "config.yaml")
     assert cfg == {"lr": 1e-3, "shape": (2, 3)}
@@ -72,7 +72,7 @@ def test_config_roundtrip(tmp_path):
 
 def test_plain_data_roundtrip_like_jax_pytrees(tmp_path):
     import numpy as np
-    log = ModelLogger(tmp_path / "r", checkpoint_backend="pickle")
+    log = Sitter(tmp_path / "r", checkpoint_backend="pickle")
     params = {"w": np.arange(3.0), "layers": [{"b": np.ones(2)}]}
     log.checkpoint(params=params, ema=Stateful(5), rng=np.array([1, 2], dtype=np.uint32), epoch=7)
     out = log.load_checkpoint(1, ema=Stateful())
@@ -83,14 +83,14 @@ def test_plain_data_roundtrip_like_jax_pytrees(tmp_path):
 
 
 def test_reserved_names_rejected(tmp_path):
-    log = ModelLogger(tmp_path / "r", checkpoint_backend="pickle")
+    log = Sitter(tmp_path / "r", checkpoint_backend="pickle")
     with pytest.raises(TypeError):  # `step` / `monitor_state` are the logger's own keys
         log.checkpoint(monitor_state=3, step=2)
 
 
 def test_dict_of_stateful_saves_states_not_objects(tmp_path):
     import pickle
-    log = ModelLogger(tmp_path / "r", checkpoint_backend="pickle")
+    log = Sitter(tmp_path / "r", checkpoint_backend="pickle")
     log.checkpoint(nets={"gen": Stateful(1), "disc": Stateful(2), "n": 9})
     raw = pickle.load(open(tmp_path / "r" / "checkpoint_1" / "checkpoint.pkl", "rb"))
     assert raw["nets"] == {"gen": {"v": 1}, "disc": {"v": 2}, "n": 9}
