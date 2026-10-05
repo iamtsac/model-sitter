@@ -1,4 +1,3 @@
-"""Run provenance: how the script was launched and which code state it ran on. Never raises."""
 import datetime
 import json
 import os

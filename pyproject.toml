@@ -26,10 +26,9 @@ dependencies = [
     "pyyaml",
 ]
 
-# TODO before publishing: point these at the new repo.
 # [project.urls]
-# Homepage = "https://github.com/<you>/model-sitter"
-# Issues = "https://github.com/<you>/model-sitter/issues"
+# Homepage = "https://github.com/iamtsac/model-sitter"
+# Issues = "https://github.com/iamtsac/model-sitter/issues"
 
 [project.optional-dependencies]
 wandb = ["wandb>=0.19"]

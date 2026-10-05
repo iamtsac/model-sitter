@@ -1,4 +1,4 @@
-# 🍼🤖 Model-Sitter
+# 🍼 Model-Sitter
 
 A small experiment logger that sits next to your training loop and keeps everything tidy:
 
