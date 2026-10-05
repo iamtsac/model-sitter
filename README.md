@@ -1,4 +1,4 @@
-# model-sitter (`import mosi`)
+# 🍼🤖 Model-Sitter
 
 A small experiment logger that sits next to your training loop and keeps everything tidy:
 
@@ -10,6 +10,7 @@ A small experiment logger that sits next to your training loop and keeps everyth
   group / name in Weights & Biases, so multi-seed experiments stay together and filterable.
 - **Weights & Biases** sync with resume (branching) and overwrite (deletes only the run's own lineage).
 - **Early stopping monitor** that tells your loop when to stop.
+- **Provenance**: `env.json` records the command line and the git state of your script's repo (commit, dirty flag, `git_diff.patch`).
 - Images, plots, videos and analysis tables in tidy per-step folders.
 
 ```
@@ -184,6 +185,9 @@ runs/seeds_run/test_s0/
   run.log                    everything the logger printed (also DEBUG lines)
   stats.jsonl                one row per step: {"step": 3, "loss": 0.2, "val/acc": 0.9}
   config.yaml
+  env.json                   launch command, python/host, git commit / branch / dirty of the script's repo
+  git_diff.patch             uncommitted changes at launch (only when the tree was dirty)
+  env.resume_<k>.json        same capture for each resume (the original env.json is kept)
   wandb_id.txt               ids of this run's W&B lineage
   checkpoint_<N>/checkpoint.{pt,pkl}
   best_model/                checkpoint of the best step + best_metrics.jsonl

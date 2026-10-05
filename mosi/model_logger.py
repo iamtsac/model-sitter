@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Union, Sequence, Callable
 
 from .checkpointing import CheckpointManager, Backend
+from .environment import write_environment
 from .groups import resolve_run_dir, write_run_info
 from .logger_config import LoggerConfig
 from .experiment_manager import ExperimentEnvironment, HistoryManager
@@ -88,6 +89,12 @@ class ModelLogger:
 
         if self.group_dir is not None and not self.env.eval_mode:
             write_run_info(self.env.fpath, group, self.name, job_type=job_type, tags=list(tags) or None)
+
+        if not self.env.eval_mode:
+            try:
+                write_environment(self.env.fpath, keep_previous=self.env.resume and not self.env.overwrite)
+            except OSError as e:
+                self.logger.debug(f"Could not write env.json: {e}")
 
         self.telemetry = None
         if not self.env.eval_mode and use_wandb:

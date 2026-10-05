@@ -1,4 +1,3 @@
-"""Serialization backends for checkpoints. Only `TorchBackend` needs torch, and it imports it lazily."""
 import pickle
 from pathlib import Path
 from typing import Any, Dict, Protocol, Union, runtime_checkable
