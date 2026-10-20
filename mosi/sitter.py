@@ -18,11 +18,11 @@ class SitterConfig:
     `dump_config` and W&B configs all handle it without extra dependencies)."""
 
     fpath: str = "runs"
-    """Root directory. With `group` the run lives in `<fpath>/<group>/<name>`."""
+    """Root directory. The run lives in `<fpath>/<run_name>`, with `group` in `<fpath>/<group>/<run_name>`."""
     group: Optional[str] = None
     """Groups related runs, also the W&B group."""
-    name: Optional[str] = None
-    """Run name inside the group, also the W&B run name."""
+    run_name: Optional[str] = None
+    """The run's folder name, also its W&B run name."""
     job_type: Optional[str] = None
     tags: Tuple[str, ...] = ()
     notes: Optional[str] = None
@@ -50,9 +50,9 @@ class Sitter:
 
     Args:
         fpath (str): The root directory for the experiment. With `group`, this is the root that holds
-            all groups and the run lives in `fpath/group/name`.
+            all groups and the run lives in `fpath/group/run_name`.
         group (str): Groups related runs (e.g. several seeds of one experiment). Mirrored as the W&B `group`.
-        name (str): Run name inside the group (also the W&B run name), e.g. group="seeds_run", name="test_s0".
+        run_name (str): The run's folder name (also its W&B run name), e.g. group="seeds_run", run_name="test_s0".
         job_type (str), tags (Sequence[str]), notes (str): Forwarded to W&B for filtering.
         project (str): W&B project, falls back to the 'WANDB_PROJECT' env variable.
         checkpoint_backend: "auto" (torch if installed, else pickle), "torch", "pickle" or a `Backend`.
@@ -93,7 +93,7 @@ class Sitter:
         use_wandb: bool = False,
         *,
         group: Optional[str] = None,
-        name: Optional[str] = None,
+        run_name: Optional[str] = None,
         job_type: Optional[str] = None,
         tags: Sequence[str] = (),
         notes: Optional[str] = None,
@@ -104,10 +104,10 @@ class Sitter:
         log_level: Union[int, str] = "INFO",
     ):
         self.group = group
-        run_dir = resolve_run_dir(fpath, group, name)
-        self.name = run_dir.name
+        run_dir = resolve_run_dir(fpath, group, run_name)
+        self.run_name = run_dir.name
         self.group_dir = run_dir.parent if group is not None else None
-        self._setup_logging(f"{group}.{self.name}" if group else self.name, log_level)
+        self._setup_logging(f"{group}.{self.run_name}" if group else self.run_name, log_level)
 
         # Initialize orthogonal managers
         self.env = ExperimentEnvironment(run_dir, overwrite, resume, eval_mode, self.logger, confirm)
@@ -117,7 +117,7 @@ class Sitter:
         self.checkpointer = CheckpointManager(self.env.fpath, self.logger, checkpoint_backend, keep_last)
 
         if self.group_dir is not None and not self.env.eval_mode:
-            write_run_info(self.env.fpath, group, self.name, job_type=job_type, tags=list(tags) or None)
+            write_run_info(self.env.fpath, group, self.run_name, job_type=job_type, tags=list(tags) or None)
 
         if not self.env.eval_mode:
             try:
@@ -130,9 +130,9 @@ class Sitter:
             from .telemetry import WandbManager
             self.telemetry = WandbManager(
                 self.env.fpath, self.env.overwrite, self.env.resume, self.logger,
-                project=project, group=group, name=self.name if group or name else None,
+                project=project, group=group, run_name=self.run_name if group or run_name else None,
                 job_type=job_type, tags=tags, notes=notes,
-                id_prefix=f"{group}_{self.name}" if group else None,
+                id_prefix=f"{group}_{self.run_name}" if group else None,
             )
 
         # Internal control state

@@ -14,7 +14,7 @@ class WandbManager:
         *,
         project: Optional[str] = None,
         group: Optional[str] = None,
-        name: Optional[str] = None,
+        run_name: Optional[str] = None,
         job_type: Optional[str] = None,
         tags: Sequence[str] = (),
         notes: Optional[str] = None,
@@ -29,7 +29,7 @@ class WandbManager:
         self.logger = logger
         self.defined_metrics = set()
         self.run = None
-        self._meta = dict(project=project, group=group, name=name, job_type=job_type,
+        self._meta = dict(project=project, group=group, run_name=run_name, job_type=job_type,
                           tags=list(tags) or None, notes=notes, id_prefix=id_prefix or fpath.name)
 
         self._init_run(overwrite, resume)
@@ -62,7 +62,7 @@ class WandbManager:
         with open(id_file, "a" if keep_lineage else "w") as f:
             f.write(f"\n{run_id}" if keep_lineage else run_id)
 
-        self._base_name = m["name"] or os.environ.get("WANDB_RUN") or run_id
+        self._base_name = m["run_name"] or os.environ.get("WANDB_RUN") or run_id
         self.run = self.wandb.init(
             project=project, id=run_id, dir=str(self.fpath),
             name=self._base_name,

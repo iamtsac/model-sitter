@@ -7,17 +7,17 @@ from typing import Any, Dict, List, Optional, Union
 RUN_INFO = "run.json"
 
 
-def resolve_run_dir(fpath: Union[str, Path], group: Optional[str], name: Optional[str]) -> Path:
-    """No group: `fpath` is the run dir (flat, as before). With a group: `fpath/group/name`."""
+def resolve_run_dir(fpath: Union[str, Path], group: Optional[str], run_name: Optional[str]) -> Path:
+    """No group: `fpath/run_name`, or `fpath` itself without a run name. With a group: `fpath/group/run_name`."""
     fpath = Path(fpath)
     if group is None:
-        return fpath / name if name else fpath
-    for part in (group, name):
+        return fpath / run_name if run_name else fpath
+    for part in (group, run_name):
         if part and (Path(part).name != part or part in (".", "..")):
-            raise ValueError(f"group/name must be plain folder names, got {part!r}")
-    if not name:
-        raise ValueError("A grouped run needs a `name`, e.g. group='seeds_run', name='test_s0'")
-    return fpath / group / name
+            raise ValueError(f"group and run_name must be plain folder names, got {part!r}")
+    if not run_name:
+        raise ValueError("A grouped run needs a `run_name`, e.g. group='seeds_run', run_name='test_s0'")
+    return fpath / group / run_name
 
 
 def write_run_info(run_dir: Path, group: str, run: str, **info: Any) -> None:

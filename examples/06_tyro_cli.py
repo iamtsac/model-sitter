@@ -1,5 +1,5 @@
 """SitterConfig is a plain dataclass, so tyro (or any dataclass CLI) can nest it in your own config.
-   python 06_tyro_cli.py --lr 0.01 --logger.group seeds_run --logger.name test_s0 --logger.keep-last 3"""
+   python 06_tyro_cli.py --lr 0.01 --logger.group seeds_run --logger.run-name test_s0 --logger.keep-last 3"""
 from dataclasses import dataclass, field
 import tyro
 from mosi import SitterConfig

@@ -62,7 +62,7 @@ def test_monitor_is_quiet_without_improvement(tmp_path, caplog):
 
 
 def test_sitter_config_builds_logger_and_roundtrips_yaml(tmp_path):
-    cfg = SitterConfig(fpath=str(tmp_path), group="g", name="n", tags=("a", "b"), keep_last=3, checkpoint_backend="pickle")
+    cfg = SitterConfig(fpath=str(tmp_path), group="g", run_name="n", tags=("a", "b"), keep_last=3, checkpoint_backend="pickle")
     log = Sitter.from_config(cfg)
     assert log.env.fpath == tmp_path / "g" / "n" and log.checkpointer.keep_last == 3
     out = tmp_path / "cfg.yaml"
@@ -72,7 +72,7 @@ def test_sitter_config_builds_logger_and_roundtrips_yaml(tmp_path):
 
 def test_sitter_config_works_with_tyro(tmp_path):
     tyro = pytest.importorskip("tyro")
-    cfg = tyro.cli(Config, args=["--lr", "0.5", "--logger.group", "g", "--logger.name", "n",
+    cfg = tyro.cli(Config, args=["--lr", "0.5", "--logger.group", "g", "--logger.run-name", "n",
                                  "--logger.tags", "x", "y", "--logger.keep-last", "2", "--logger.fpath", str(tmp_path)])
     assert cfg.lr == 0.5 and cfg.logger.tags == ("x", "y") and cfg.logger.keep_last == 2
     log = cfg.logger.build(checkpoint_backend="pickle")

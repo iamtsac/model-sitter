@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Renamed the run's `name` to `run_name`: `Sitter(run_name=...)`, `SitterConfig.run_name` (CLI `--logger.run-name`), `Sitter.run_name` and `resolve_run_dir(..., run_name)`. `name=` is no longer accepted. The `name` key in `run.json` is unchanged.
 - Renamed `ModelLogger` to `Sitter` and `LoggerConfig` to `SitterConfig` (both in `mosi.sitter`). The old names remain as deprecated aliases. On-disk run format is unchanged.
 
 ## 0.1.0

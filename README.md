@@ -6,7 +6,7 @@ A small experiment logger that sits next to your training loop and keeps everyth
 - **Lossless configs** in `config.yaml` (dataclasses, tuples, paths, enums, arrays, partials).
 - **Checkpoints** of anything with `state_dict()` / `load_state_dict()` *or* plain data (jax pytrees, numpy
   arrays, rng keys, sklearn estimators). Torch is optional. Best model tracking, `keep_last`, atomic writes.
-- **Groups**: `group="seeds_run", name="test_s0"` gives `runs/seeds_run/test_s0/` on disk and the same
+- **Groups**: `group="seeds_run", run_name="test_s0"` gives `runs/seeds_run/test_s0/` on disk and the same
   group / name in Weights & Biases, so multi-seed experiments stay together and filterable.
 - **Weights & Biases** sync with resume (branching) and overwrite (deletes only the run's own lineage).
 - **Early stopping monitor** that tells your loop when to stop.
@@ -97,7 +97,7 @@ Use `checkpoint_backend="pickle"` explicitly in jax / sklearn projects: `"auto"`
 
 ```python
 for seed in range(3):
-    with Sitter("runs", group="seeds_run", name=f"test_s{seed}",
+    with Sitter("runs", group="seeds_run", run_name=f"test_s{seed}",
                      job_type="train", tags=["baseline"], use_wandb=True) as sitter:
         sitter.add_config(seed=seed)           # put the seed in the config to filter on it in W&B
         train(sitter, seed)
@@ -159,7 +159,7 @@ class Config:
     lr: float = 1e-3
     logger: SitterConfig = field(default_factory=SitterConfig)
 
-cfg = tyro.cli(Config)       # --logger.group seeds_run --logger.name test_s0 --logger.use-wandb
+cfg = tyro.cli(Config)       # --logger.group seeds_run --logger.run-name test_s0 --logger.use-wandb
 with cfg.logger.build() as sitter:      # or Sitter.from_config(cfg.logger, confirm=...)
     sitter.add_config(cfg)              # lossless YAML of the whole config
 ```

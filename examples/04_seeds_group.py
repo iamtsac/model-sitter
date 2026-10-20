@@ -6,7 +6,7 @@ from mosi import Sitter, load_group_stats
 
 use_wandb = "--wandb" in sys.argv
 for seed in range(3):
-    with Sitter("runs", group="seeds_run", name=f"test_s{seed}", job_type="train", tags=["demo"],
+    with Sitter("runs", group="seeds_run", run_name=f"test_s{seed}", job_type="train", tags=["demo"],
                      use_wandb=use_wandb, checkpoint_backend="pickle", log_level="WARNING",
                      confirm=lambda msg: True) as sitter:
         sitter.add_config(seed=seed, lr=0.1)           # the seed is just config, so you can filter on it in W&B
