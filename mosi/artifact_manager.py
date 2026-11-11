@@ -9,8 +9,9 @@ from typing import Optional, List, Dict, Union, Any
 from .config_yaml import dump_config
 
 class ArtifactManager:
-    def __init__(self, work_dir: Path, logger: logging.Logger):
-        self.work_dir = work_dir
+    def __init__(self, work_dir: Optional[Path], logger: logging.Logger, eval_mode: bool = False):
+        self.work_dir = work_dir  # None in an evaluation until its folder exists
+        self.eval_mode = eval_mode
         self.logger = logger
         self._obj: Any = None
         self._extra: Dict[str, Any] = {}
@@ -31,9 +32,13 @@ class ArtifactManager:
         with open(self.work_dir / 'config.yaml', 'w', encoding='utf-8') as f:
             f.write(dump_config(doc))
 
-    def _step_dir(self, kind: str, step: int) -> Path:
-        """`<run>/<kind>/step_<step>/`, kind being images, videos or analysis."""
-        d = self.work_dir / kind / f"step_{step}"
+    def artifact_dir(self, kind: str, step: int) -> Path:
+        """`<work_dir>/artifacts/step_<step>/<kind>/` in training, `<work_dir>/artifacts/<kind>/` in an
+        evaluation (no step level there). Created."""
+        if not kind or Path(kind).name != kind or kind in (".", ".."):
+            raise ValueError(f"artifact kind must be a plain folder name, got {kind!r}")
+        d = self.work_dir / "artifacts"
+        d = d / kind if self.eval_mode else d / f"step_{step}" / kind
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -41,7 +46,7 @@ class ArtifactManager:
         keys, values = list(data.keys()), list(data.values())
         if not values: return None
 
-        csv_path = self._step_dir("analysis", step) / f"{name}.csv"
+        csv_path = self.artifact_dir("analysis", step) / f"{name}.csv"
         with open(csv_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(keys)
@@ -50,7 +55,7 @@ class ArtifactManager:
 
     def save_media(self, name: str, obj: Any, step: int, **kwargs) -> Optional[Path]:
         """ Mainly for plots and images through matplotlib, seaborn or PIL """
-        file_path = self._step_dir("images", step) / name
+        file_path = self.artifact_dir("images", step) / name
 
         if hasattr(obj, 'savefig'): obj.savefig(file_path, **kwargs)
         elif hasattr(obj, 'save'): obj.save(file_path, **kwargs)
@@ -60,7 +65,7 @@ class ArtifactManager:
         return file_path
 
     def save_video(self, name: str, video: Union[str, Path, np.ndarray], step: int, **imageio_kwargs) -> Optional[Path]:
-        target_path = self._step_dir("videos", step) / name
+        target_path = self.artifact_dir("videos", step) / name
         if target_path.suffix != '.mp4': 
             target_path = target_path.with_suffix('.mp4')
 

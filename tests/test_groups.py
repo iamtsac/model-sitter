@@ -47,8 +47,8 @@ def test_overwrite_only_touches_own_run(tmp_path):
         log = Sitter(tmp_path, group="g", run_name=n)
         log.add_stats(loss=1.0); log.finish()
     Sitter(tmp_path, group="g", run_name="s0", overwrite=True, confirm=YES).finish()
-    assert not (tmp_path / "g" / "s0" / "stats.jsonl").exists()
-    assert (tmp_path / "g" / "s1" / "stats.jsonl").exists()
+    assert not (tmp_path / "g" / "s0" / "logs" / "stats.jsonl").exists()
+    assert (tmp_path / "g" / "s1" / "logs" / "stats.jsonl").exists()
 
 
 def test_confirm_can_abort(tmp_path):
@@ -94,7 +94,12 @@ def test_wandb_resume_branches_without_name_growth(tmp_path, fake_wandb):
         assert log.telemetry.run.name == "s0_resume_from_step_1"      # always from the original name
         assert "resumed" in log.telemetry.run.tags
         log.finish()
-    ids = (tmp_path / "g" / "s0" / "wandb_id.txt").read_text().split()
+    info = json.loads((tmp_path / "g" / "s0" / "run.json").read_text())
+    runs = info["wandb"]["runs"]
+    ids = [r["id"] for r in runs]
+    assert [r["resumed_from_step"] for r in runs] == [None, 1, 1]
+    assert [r["name"] for r in runs] == ["s0", "s0_resume_from_step_1", "s0_resume_from_step_1"]
+    assert info["wandb"]["project"] == "proj"
     assert len(ids) == 3 and len(set(ids)) == 3                       # one fresh id per run, no duplicates
     assert [step for step, d in fake_wandb.logs if "loss" in d].count(1) == 3  # history replayed into each branch
 

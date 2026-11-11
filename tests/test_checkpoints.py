@@ -17,8 +17,8 @@ def test_pickle_roundtrip_and_best(tmp_path):
     log.add_stats(loss=2.0); log.checkpoint(metrics={"loss": 2.0}, model=m, optimizer=opts); log.step()
     m.v = 2
     log.add_stats(loss=1.0); log.checkpoint(metrics={"loss": 1.0}, model=m, optimizer=opts); log.step()
-    assert (tmp_path / "r" / "checkpoint_1" / "checkpoint.pkl").exists()
-    assert (tmp_path / "r" / "best_model" / "checkpoint.pkl").exists()
+    assert (tmp_path / "r" / "checkpoints" / "step_1" / "checkpoint.pkl").exists()
+    assert (tmp_path / "r" / "checkpoints" / "best" / "checkpoint.pkl").exists()
 
     fresh = Sitter(tmp_path / "r", eval_mode=True, checkpoint_backend="pickle")
     m2, opts2 = Stateful(), [Stateful(), Stateful()]
@@ -55,7 +55,7 @@ def test_torch_backend(tmp_path):
     opt = torch.optim.SGD(net.parameters(), lr=0.1)
     log = Sitter(tmp_path / "r")  # auto -> torch
     log.checkpoint(model=net, optimizer=opt)
-    assert (tmp_path / "r" / "checkpoint_1" / "checkpoint.pt").exists()
+    assert (tmp_path / "r" / "checkpoints" / "step_1" / "checkpoint.pt").exists()
     net2 = torch.nn.Linear(3, 2)
     Sitter(tmp_path / "r", eval_mode=True).load_checkpoint(1, model=net2, optimizer=torch.optim.SGD(net2.parameters(), lr=0.1))
     assert torch.equal(net.weight, net2.weight)
@@ -92,7 +92,7 @@ def test_dict_of_stateful_saves_states_not_objects(tmp_path):
     import pickle
     log = Sitter(tmp_path / "r", checkpoint_backend="pickle")
     log.checkpoint(nets={"gen": Stateful(1), "disc": Stateful(2), "n": 9})
-    raw = pickle.load(open(tmp_path / "r" / "checkpoint_1" / "checkpoint.pkl", "rb"))
+    raw = pickle.load(open(tmp_path / "r" / "checkpoints" / "step_1" / "checkpoint.pkl", "rb"))
     assert raw["nets"] == {"gen": {"v": 1}, "disc": {"v": 2}, "n": 9}
     live = {"gen": Stateful(), "disc": Stateful()}
     out = log.load_checkpoint(1, nets=live)

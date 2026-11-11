@@ -1,15 +1,52 @@
-import sys
+import atexit
+import datetime
 import dataclasses
 import logging
+import logging.handlers
+import sys
+import weakref
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Union, Sequence, Callable, Tuple
 
 from .checkpointing import CheckpointManager, Backend
 from .environment import write_environment
-from .groups import resolve_run_dir, write_run_info
+from .groups import resolve_run_dir, write_run_info, update_info
 from .experiment_manager import ExperimentEnvironment, HistoryManager
 from .artifact_manager import ArtifactManager
 from .model_monitor import _ModelMonitor
+
+
+_LIVE: "weakref.WeakSet[Sitter]" = weakref.WeakSet()  # Sitters whose run has not been finished yet
+_exception_seen = False
+_hooks_installed = False
+
+
+def _install_exit_hooks() -> None:
+    """Once per process: remember that an uncaught exception ended the program (excepthook) and, at exit,
+    mark the still unfinished runs `crashed`. The original hook always runs, so the traceback is untouched."""
+    global _hooks_installed
+    if _hooks_installed:
+        return
+    _hooks_installed = True
+    previous = sys.excepthook
+
+    def hook(exc_type, exc, tb):
+        global _exception_seen
+        _exception_seen = True
+        previous(exc_type, exc, tb)
+
+    sys.excepthook = hook
+    atexit.register(_mark_unfinished_crashed)
+
+
+def _mark_unfinished_crashed() -> None:
+    if not _exception_seen:
+        return
+    for sitter in list(_LIVE):
+        try:
+            sitter._set_status("crashed")
+        except Exception:  # an exit hook must never raise
+            pass
 
 
 @dataclasses.dataclass
@@ -32,8 +69,12 @@ class SitterConfig:
     overwrite: bool = False
     resume: bool = False
     eval_mode: bool = False
+    eval_name: Optional[str] = None
+    """Evaluation folder name in `<run>/evaluations/` (default `step_<N>_<timestamp>`)."""
+    eval_wandb: bool = False
+    """Also create a W&B run for an evaluation (off by default)."""
     keep_last: Optional[int] = None
-    """Keep only the newest N checkpoints (best_model is always kept)."""
+    """Keep only the newest N checkpoints (checkpoints/best is always kept)."""
     checkpoint_backend: str = "auto"
     """auto, torch or pickle."""
 
@@ -56,15 +97,19 @@ class Sitter:
         job_type (str), tags (Sequence[str]), notes (str): Forwarded to W&B for filtering.
         project (str): W&B project, falls back to the 'WANDB_PROJECT' env variable.
         checkpoint_backend: "auto" (torch if installed, else pickle), "torch", "pickle" or a `Backend`.
-        keep_last: Keep only the newest N `checkpoint_*` folders (`best_model/` is always kept).
+        keep_last: Keep only the newest N `checkpoints/step_*` folders (`checkpoints/best/` is always kept).
         confirm: Callable(msg) -> bool replacing the interactive overwrite prompt (for sweeps / CI).
-        log_level: Console level ("INFO", "WARNING", "DEBUG"...). The full log is also written to `run.log` in the run dir.
+        log_level: Console level ("INFO", "WARNING", "DEBUG"...). The full log is also written to `logs/run.log` of the run (or evaluation) dir.
         overwrite (bool): If True, wipes local stats and deletes the entire WandB lineage 
             from the server. Prompts for user verification if the folder exists.
         resume (bool): If True, attempts to load existing stats and continue the experiment. 
             Creates a new 'branch' in WandB to avoid data overlap.
-        eval_mode (bool): If True, locks onto the existing folder without creating 
-            timestamps and disables all WandB logging. Perfect for inference scripts.
+        eval_mode (bool): If True, opens the existing run read-only for weights; everything the evaluation writes
+            (config, logs, launch info, stats, artifacts) goes to `<run>/evaluations/<eval_name>/`, created on the
+            first `load_checkpoint` / write. No W&B run unless `eval_wandb=True`. Perfect for inference scripts.
+        eval_name (str): Name of that evaluation folder; default `step_<N>_<YYYY-mm-ddTHH-MM-SS>` (N = the loaded
+            checkpoint step, only the timestamp if none was loaded). An existing folder is never reused (raises).
+        eval_wandb (bool): Create a W&B run for the evaluation too (default False).
         use_wandb (bool): Enables Weights & Biases integration. Requires 'WANDB_PROJECT' 
             env variable.
 
@@ -75,11 +120,11 @@ class Sitter:
             run with a lineage-tracking name, and replays history into the new run.
         - Hard Reset (True, True, False): Loads weights from 'fpath', but deletes ALL 
             previous WandB runs in the lineage and wipes local 'stats.jsonl' history.
-        - Evaluation (False, False, True): Static access to 'fpath' for weight loading; 
-            no logging or directory mutation.
+        - Evaluation (False, False, True): Static access to 'fpath' for weight loading; the run itself is
+            never mutated, outputs go to its own `evaluations/<eval_name>/` folder.
 
     WandB Lineage Tracking:
-        The logger maintains a 'wandb_id.txt' file in 'fpath'. This acts as a 'hit-list'
+        The logger keeps a `wandb` block (project, entity, one entry per W&B run started) in 'run.json'. This acts as a 'hit-list'
         for overwrites and a 'breadcrumb' for resumes. Resumed runs are renamed on the
         server to "ParentName_resume_from_step_X" to maintain clear experiment history.
     """
@@ -92,6 +137,8 @@ class Sitter:
         eval_mode: bool = False,
         use_wandb: bool = False,
         *,
+        eval_name: Optional[str] = None,
+        eval_wandb: bool = False,
         group: Optional[str] = None,
         run_name: Optional[str] = None,
         job_type: Optional[str] = None,
@@ -107,39 +154,104 @@ class Sitter:
         run_dir = resolve_run_dir(fpath, group, run_name)
         self.run_name = run_dir.name
         self.group_dir = run_dir.parent if group is not None else None
-        self._setup_logging(f"{group}.{self.run_name}" if group else self.run_name, log_level)
+        self._log_name = f"{group}.{self.run_name}" if group else self.run_name
+        self._setup_logging(self._log_name, log_level)
 
         # Initialize orthogonal managers
         self.env = ExperimentEnvironment(run_dir, overwrite, resume, eval_mode, self.logger, confirm)
-        self._attach_log_file()
-        self.history = HistoryManager(self.env.work_dir, self.env.overwrite, self.env.eval_mode, self.logger)
-        self.artifacts = ArtifactManager(self.env.work_dir, self.logger)
+        self.history = HistoryManager(self.env.fpath, self.env.overwrite, self.logger)
+        self.artifacts = ArtifactManager(self.env.work_dir, self.logger, self.env.eval_mode)
         self.checkpointer = CheckpointManager(self.env.fpath, self.logger, checkpoint_backend, keep_last)
-
-        if self.group_dir is not None and not self.env.eval_mode:
-            write_run_info(self.env.fpath, group, self.run_name, job_type=job_type, tags=list(tags) or None)
-
-        if not self.env.eval_mode:
-            try:
-                write_environment(self.env.fpath, keep_previous=self.env.resume and not self.env.overwrite)
-            except OSError as e:
-                self.logger.debug(f"Could not write env.json: {e}")
-
-        self.telemetry = None
-        if not self.env.eval_mode and use_wandb:
-            from .telemetry import WandbManager
-            self.telemetry = WandbManager(
-                self.env.fpath, self.env.overwrite, self.env.resume, self.logger,
-                project=project, group=group, run_name=self.run_name if group or run_name else None,
-                job_type=job_type, tags=tags, notes=notes,
-                id_prefix=f"{group}_{self.run_name}" if group else None,
-            )
 
         # Internal control state
         self._step = 1
+        self._loaded_step: Optional[int] = None
         self._monitor = None
         self._use_rollback = False
+        self.telemetry = None
+        self._info_path: Optional[Path] = None  # run.json (training) / eval.json (evaluation)
+        self._status_set = False
+        self._start_args = dict(group=group, run_name=run_name, job_type=job_type, tags=list(tags), notes=notes, project=project,
+                                use_wandb=use_wandb, eval_name=eval_name, eval_wandb=eval_wandb)
+
+        if self.env.eval_mode:
+            # the evaluation folder is named after the checkpoint step, so it opens at the first load / write;
+            # until then the log lines wait in memory
+            self._buffer = logging.handlers.MemoryHandler(capacity=10_000, flushLevel=logging.CRITICAL + 1)
+            self.logger.addHandler(self._buffer)
+        else:
+            self._open_work_dir()
         self.logger.info(f"Initialized Experiment at: {self.env.fpath}")
+
+    def _open_work_dir(self) -> None:
+        """Training: sets up run.json, logs, launch info and W&B at construction. Evaluation: the same inside
+        `evaluations/<eval_name>/`, once the loaded checkpoint step is known (or at the first write)."""
+        a = self._start_args
+        env = self.env
+        if env.eval_mode:
+            self._eval_name = a["eval_name"] or self._default_eval_name()
+            env.open_eval(self._eval_name)
+        self.history.bind(env.work_dir)
+        self.artifacts.work_dir = env.work_dir
+        self._attach_log_file()
+
+        if env.eval_mode:
+            self._info_path = env.work_dir / "eval.json"
+            update_info(self._info_path, name=self._eval_name, run=self.run_name,
+                        created=datetime.datetime.now().isoformat(timespec="seconds"),
+                        checkpoint=None, status="running", finished=None)
+        else:
+            self._info_path = env.fpath / "run.json"
+            write_run_info(env.fpath, a["group"], self.run_name, job_type=a["job_type"], tags=a["tags"] or None)
+            if env.resume or env.overwrite:
+                update_info(self._info_path, status="running", finished=None)
+        self._status_set = False
+        _install_exit_hooks()
+        _LIVE.add(self)
+
+        try:
+            write_environment(env.launch_dir, keep_previous=env.resume and not env.overwrite, logger=self.logger)
+        except OSError as e:
+            self.logger.warning(f"Provenance: could not write env.json / git_diff.patch: {e}")
+
+        group, name = a["group"], self.run_name
+        if a["use_wandb"] and (not env.eval_mode or a["eval_wandb"]):
+            from .telemetry import WandbManager
+            prefix = f"{group}_{name}" if group else name
+            if env.eval_mode:
+                wandb_name, prefix = f"{name}_{self._eval_name}", f"{prefix}_{self._eval_name}"
+            else:
+                wandb_name = name if group or a["run_name"] else None
+            self.telemetry = WandbManager(
+                self._info_path, env.logs_dir, env.overwrite, env.resume, self.logger,
+                project=a["project"], group=group, run_name=wandb_name,
+                job_type=a["job_type"], tags=a["tags"], notes=a["notes"], id_prefix=prefix,
+            )
+
+    def _default_eval_name(self) -> str:
+        stamp = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        return f"step_{self._loaded_step}_{stamp}" if self._loaded_step is not None else stamp
+
+    def _ensure_open(self) -> None:
+        """Evaluation: creates its folder (once). Training: nothing to do."""
+        if self.env.eval_mode and self.env.work_dir is None:
+            self._open_work_dir()
+
+    @property
+    def current_step(self) -> int:
+        """The step the next `add_*` / `checkpoint` call belongs to (read-only; change it with `step()`)."""
+        return self._step
+
+    @property
+    def loaded_step(self) -> Optional[int]:
+        """Step of the checkpoint last restored by `load_checkpoint`, None before any."""
+        return self._loaded_step
+
+    def artifact_dir(self, kind: str) -> Path:
+        """Folder for files of your own: `<run>/artifacts/step_<current step>/<kind>/` in training,
+        `<evaluation dir>/artifacts/<kind>/` in an evaluation. Created, `kind` is a plain folder name."""
+        self._ensure_open()
+        return self.artifacts.artifact_dir(kind, self._step)
 
     def step(self, step: Optional[int] = None) -> None:
         if len(self.history._stage_buffer):
@@ -149,19 +261,41 @@ class Sitter:
         self._step = step if step is not None else self._step + 1
 
     def finish(self) -> None:
-        """Flushes pending stats and closes the W&B run (needed between runs of a sweep)."""
+        """Flushes pending stats, marks the run `finished` and closes the W&B run (needed between runs of a sweep)."""
+        self._finish("finished")
+
+    def _finish(self, status: str) -> None:
         self.step()
+        self._set_status(status)
         if self.telemetry: self.telemetry.finish()
         for h in list(self.logger.handlers):
-            if isinstance(h, logging.FileHandler):
+            if isinstance(h, (logging.FileHandler, logging.handlers.MemoryHandler)):
                 h.close()
                 self.logger.removeHandler(h)
+
+    def _set_status(self, status: str) -> None:
+        """Writes `status` (+ `finished` time) into run.json / eval.json; the first final status wins."""
+        if self._info_path is None or self._status_set:
+            return
+        self._status_set = True
+        _LIVE.discard(self)
+        try:
+            update_info(self._info_path, status=status,
+                        finished=datetime.datetime.now().isoformat(timespec="seconds"))
+        except OSError as e:
+            self.logger.warning(f"Could not write the status to {self._info_path}: {e}")
 
     def __enter__(self) -> "Sitter":
         return self
 
-    def __exit__(self, *exc) -> None:
-        self.finish()
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if exc_type is None or (issubclass(exc_type, SystemExit) and not exc.code):
+            self.finish()
+            return
+        try:  # the original exception must come out of the `with` untouched
+            self._finish("crashed")
+        except Exception as e:
+            self.logger.warning(f"Could not close the run cleanly after {exc_type.__name__}: {e!r}")
 
     @property
     def should_stop(self) -> bool:
@@ -169,9 +303,12 @@ class Sitter:
         return bool(self._monitor and self._monitor.should_stop)
 
     def add_stats(self, **stats) -> None:
+        self._ensure_open()
         flat_stats = self.history.stage_metrics(stats)
         if self.telemetry: self.telemetry.define_metrics(flat_stats)
-        if self.env.eval_mode: self.history.flush_buffer_to_jsonl(self._step)
+        if self.env.eval_mode:
+            entry = self.history.flush_buffer_to_jsonl(self._step)
+            if self.telemetry: self.telemetry.log_metrics(entry, self._step)
 
     def checkpoint(self, metrics: dict = None, **kwargs) -> None:
         if self.env.eval_mode:
@@ -197,8 +334,13 @@ class Sitter:
         )
 
     def load_checkpoint(self, step: Union[int, str], **kwargs) -> dict:
-        checkpoint, _path = self.checkpointer.load(step, **kwargs)
+        checkpoint, ckpt_path = self.checkpointer.load(step, **kwargs)
         loaded_step = checkpoint.get("step", step)
+        if isinstance(loaded_step, int):
+            self._loaded_step = loaded_step
+        if self.env.eval_mode:
+            self._ensure_open()
+            update_info(self._info_path, checkpoint={"path": str(ckpt_path), "step": self._loaded_step})
 
         if self.env.resume:
             self._step = loaded_step + 1
@@ -235,8 +377,7 @@ class Sitter:
 
     def add_config(self, config: Any = None, **values):
         """`config` is any object `dump_config` can store (e.g. a dataclass), `values` merge as a dict."""
-        if self.env.eval_mode:
-            return
+        self._ensure_open()
         for c in (config, values or None):
             if c is None:
                 continue
@@ -246,18 +387,22 @@ class Sitter:
                 self.telemetry.update_config(ArtifactManager._sanitize_config(flat))
 
     def add_plot(self, name: str, plot: Any, **kwargs):
+        self._ensure_open()
         path = self.artifacts.save_media(name, plot, self._step, **kwargs)
         if self.telemetry and path: self.telemetry.log_plot(name, plot, self._step)
 
     def add_image(self, name: str, image: Any, **kwargs):
+        self._ensure_open()
         path = self.artifacts.save_media(name, image, self._step, **kwargs)
         if self.telemetry and path: self.telemetry.log_image(name, path, self._step)
 
     def add_video(self, name: str, video: Any, **imageio_kwargs):
+        self._ensure_open()
         path = self.artifacts.save_video(name, video, self._step, **imageio_kwargs)
         if self.telemetry and path: self.telemetry.log_video(name, path, self._step)
 
     def add_analysis(self, name: str, data: Dict[str, List]):
+        self._ensure_open()
         self.artifacts.save_csv(name, data, self._step)
         if self.telemetry: self.telemetry.log_table(name, data, self._step)
 
@@ -280,8 +425,13 @@ class Sitter:
         self.logger.addHandler(sh)
 
     def _attach_log_file(self) -> None:
-        if self.env.eval_mode:
-            return
-        fh = logging.FileHandler(self.env.work_dir / "run.log", mode="a" if self.env.resume else "w", encoding="utf-8")
+        """`logs/run.log` of the work dir. In an evaluation, the lines logged before its folder existed go first."""
+        fh = logging.FileHandler(self.env.logs_dir / "run.log", mode="a" if self.env.resume else "w", encoding="utf-8")
         fh.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+        buffer = getattr(self, "_buffer", None)
+        if buffer is not None:
+            buffer.setTarget(fh)
+            buffer.flush()
+            self.logger.removeHandler(buffer)
+            buffer.close()
         self.logger.addHandler(fh)

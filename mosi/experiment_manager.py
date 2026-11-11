@@ -6,8 +6,13 @@ import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Union, Any, Callable
 
+from .layout import check_layout
+
 class ExperimentEnvironment:
-    """ Helper class that manages the local experiment directories and paths """
+    """ Helper class that manages the local experiment directories and paths.
+
+    `fpath` is the run folder. `work_dir` is where this process writes config / logs / launch info: the run
+    folder in training, `<run>/evaluations/<eval_name>/` in an evaluation (None until `open_eval`)."""
     def __init__(self, fpath: str, overwrite: bool, resume: bool, eval_mode: bool, logger: logging.Logger,
                  confirm: Optional[Callable[[str], bool]] = None):
         self.fpath = Path(fpath)
@@ -17,13 +22,40 @@ class ExperimentEnvironment:
         self.logger = logger
         self.confirm = confirm or self._ask_user
 
-        self.work_dir = self.fpath / "evaluation" if self.eval_mode else self.fpath
+        self.work_dir: Optional[Path] = None if self.eval_mode else self.fpath
 
         self._setup_directory()
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.work_dir / "logs"
+
+    @property
+    def launch_dir(self) -> Path:
+        return self.work_dir / "launch"
+
+    @property
+    def checkpoints_dir(self) -> Path:
+        return self.fpath / "checkpoints"
+
+    def open_eval(self, eval_name: str) -> Path:
+        """Creates `<run>/evaluations/<eval_name>/` (never reuses an existing folder) and makes it the work dir."""
+        if Path(eval_name).name != eval_name or eval_name in (".", ".."):
+            raise ValueError(f"eval_name must be a plain folder name, got {eval_name!r}")
+        eval_dir = self.fpath / "evaluations" / eval_name
+        eval_dir.parent.mkdir(parents=True, exist_ok=True)
+        eval_dir.mkdir()  # FileExistsError if there already is such an evaluation
+        self.work_dir = eval_dir
+        self.logs_dir.mkdir()
+        self.launch_dir.mkdir()
+        return eval_dir
 
     def _setup_directory(self) -> None:
         if self.eval_mode and not self.fpath.exists():
             raise FileNotFoundError(f"eval_mode needs an existing run, but {self.fpath} does not exist")
+
+        if self.resume or self.eval_mode or self.overwrite:
+            check_layout(self.fpath)
 
         if self.overwrite and self.fpath.exists() and not (self.resume or self.eval_mode):
             msg = (f"Overwrite is set to True for '{self.fpath}'. This will completely DESTROY existing local stats "
@@ -45,7 +77,9 @@ class ExperimentEnvironment:
                 self.logger.info(f"Archived previous run to: {archived_path}")
 
         self.fpath.mkdir(parents=True, exist_ok=True)
-        self.work_dir.mkdir(parents=True, exist_ok=True)
+        if self.work_dir is not None:
+            self.logs_dir.mkdir(exist_ok=True)
+            self.launch_dir.mkdir(exist_ok=True)
 
     @staticmethod
     def _ask_user(msg: str) -> bool:
@@ -53,22 +87,23 @@ class ExperimentEnvironment:
         return input("Proceed? [y/N]: ").strip().lower() == 'y'
 
 class HistoryManager:
+    """Stats rows in `<work_dir>/logs/stats.jsonl`; `bind` says which work dir (known late in an evaluation)."""
 
-    def __init__(self, work_dir: Path, overwrite: bool, eval_mode: bool, logger: logging.Logger):
-        self.work_dir = work_dir
+    def __init__(self, fpath: Path, overwrite: bool, logger: logging.Logger):
         self.logger = logger
-
-        filename = "eval_stats.jsonl" if eval_mode else "stats.jsonl"
-        self.stats_file = self.work_dir / filename
+        self.overwrite = overwrite
+        self.stats_file: Optional[Path] = None
 
         self._stage_buffer: Dict[str, Any] = {}
 
-        if overwrite and self.stats_file.exists():
-            self.stats_file.unlink()
-
-        best_metrics_file = self.work_dir / "best_model/best_metrics.jsonl"
+        best_metrics_file = Path(fpath) / "checkpoints" / "best" / "best_metrics.jsonl"
         if overwrite and best_metrics_file.exists():
             best_metrics_file.unlink()
+
+    def bind(self, work_dir: Path) -> None:
+        self.stats_file = Path(work_dir) / "logs" / "stats.jsonl"
+        if self.overwrite and self.stats_file.exists():
+            self.stats_file.unlink()
 
     def stage_metrics(self, stats: dict) -> Dict[str, Any]:
         flat_stats = {k: self._to_scalar(k, v) for k, v in self._flatten_dict(stats).items()}

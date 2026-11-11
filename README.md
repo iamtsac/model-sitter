@@ -2,7 +2,7 @@
 
 A small experiment logger that sits next to your training loop and keeps everything tidy:
 
-- **Stats** per step in `stats.jsonl`, nested dicts flattened (`val/acc`).
+- **Stats** per step in `logs/stats.jsonl`, nested dicts flattened (`val/acc`).
 - **Lossless configs** in `config.yaml` (dataclasses, tuples, paths, enums, arrays, partials).
 - **Checkpoints** of anything with `state_dict()` / `load_state_dict()` *or* plain data (jax pytrees, numpy
   arrays, rng keys, sklearn estimators). Torch is optional. Best model tracking, `keep_last`, atomic writes.
@@ -10,8 +10,9 @@ A small experiment logger that sits next to your training loop and keeps everyth
   group / name in Weights & Biases, so multi-seed experiments stay together and filterable.
 - **Weights & Biases** sync with resume (branching) and overwrite (deletes only the run's own lineage).
 - **Early stopping monitor** that tells your loop when to stop.
-- **Provenance**: `env.json` records the command line and the git state of your script's repo (commit, dirty flag, `git_diff.patch`).
-- Images, plots, videos and analysis tables in tidy per-step folders.
+- **Provenance** in `launch/`: `env.json` records the command line, git state, GPU, package versions and pixi lock; `git_diff.patch` holds the uncommitted changes, untracked files included.
+- Images, plots, videos and analysis tables (and your own files via `artifact_dir`) in tidy per-step folders.
+- **Evaluations** nested in the run (`evaluations/<eval_name>/`), run status in `run.json`, `mosi migrate` for older runs.
 
 ```
 pip install model-sitter                  # core: numpy + pyyaml only
@@ -125,7 +126,7 @@ for step in ...:
     if sitter.should_stop:                    # patience ran out; the monitor never stops training itself
         break
 
-sitter.load_checkpoint("best", model=model)   # best_model/ is kept up to date and never pruned
+sitter.load_checkpoint("best", model=model)   # checkpoints/best/ is kept up to date and never pruned
 ```
 
 `increase_keys` / `decrease_keys` take a list or a nested dict (`{"val": ["acc", "f1"]}`). Several keys are
@@ -141,10 +142,10 @@ Sitter("runs/exp", use_wandb=True, project="my-project")   # or export WANDB_PRO
 |---|---|---|
 | nothing special | new run; an existing folder is archived to `<name>_<timestamp>` | new run `<folder>_<id>` |
 | `resume=True` | keeps the folder, `load_checkpoint` truncates stats to the checkpoint | a **new branch run** `<name>_resume_from_step_N` (tag `resumed`) with history up to the checkpoint replayed, so it never collides with steps the server already holds |
-| `overwrite=True` | wipes stats (asks first, or pass `confirm=lambda msg: True`) | deletes this run's own lineage (`wandb_id.txt`) |
-| `eval_mode=True` | read only, extras go to `evaluation/` | disabled |
+| `overwrite=True` | wipes stats (asks first, or pass `confirm=lambda msg: True`) | deletes this run's own lineage (the `wandb.runs` listed in `run.json`, in the project stored there) |
+| `eval_mode=True` | run is read only, outputs go to `evaluations/<eval_name>/` | none unless `eval_wandb=True` (then its ids go in that `eval.json`) |
 
-Use `WANDB_MODE=offline` to log without a network. Media (`images/`, `videos/`, `analysis/`) are synced too.
+Use `WANDB_MODE=offline` to log without a network. Media (`images`, `videos`, `analysis` artifacts) are synced too. The ids of the W&B runs a run started (one per start / resume) are kept in the `wandb` block of `run.json`.
 Each logger holds its own W&B run handle, but `wandb` itself allows one active run per process, so use
 `with` / `finish()` between runs of a sweep.
 
@@ -173,7 +174,7 @@ with cfg.logger.build() as sitter:      # or Sitter.from_config(cfg.logger, conf
 
 ```python
 sitter.add_image("sample.png", pil_image)             # anything with .save(path); plots: .savefig(path)
-sitter.add_plot("curve.png", matplotlib_figure)       # saved under images/ too, logged to W&B as a plot
+sitter.add_plot("curve.png", matplotlib_figure)       # saved under artifacts/step_<N>/images/ too, logged to W&B as a plot
 sitter.add_video("rollout", frames_uint8_THWC, fps=15)    # needs model-sitter[media]; or pass an .mp4 path
 sitter.add_analysis("weights", {"idx": [0, 1], "val": [0.1, 0.2]})   # CSV (+ W&B table)
 ```
@@ -182,17 +183,67 @@ sitter.add_analysis("weights", {"idx": [0, 1], "val": [0.1, 0.2]})   # CSV (+ W&
 
 ```
 runs/seeds_run/test_s0/
-  run.log                    everything the logger printed (also DEBUG lines)
-  stats.jsonl                one row per step: {"step": 3, "loss": 0.2, "val/acc": 0.9}
-  config.yaml
-  env.json                   launch command, python/host, git commit / branch / dirty of the script's repo
-  git_diff.patch             uncommitted changes at launch (only when the tree was dirty)
-  env.resume_<k>.json        same capture for each resume (the original env.json is kept)
-  wandb_id.txt               ids of this run's W&B lineage
-  checkpoint_<N>/checkpoint.{pt,pkl}
-  best_model/                checkpoint of the best step + best_metrics.jsonl
-  images/step_<N>/   videos/step_<N>/   analysis/step_<N>/
+├── run.json        group, name, created, job_type, tags, wandb, status, finished, layout_version
+├── config.yaml
+├── launch/         env.json, git_diff.patch; resume_<k>/ for each resume (same two files)
+├── logs/           run.log, stats.jsonl, wandb/
+├── checkpoints/    step_<N>/checkpoint.{pt,pkl}, best/ (+ best_metrics.jsonl)
+├── artifacts/step_<N>/<kind>/      kind = images | videos | analysis | anything passed to artifact_dir
+└── evaluations/<eval_name>/
+    ├── eval.json   checkpoint evaluated (path + step), created, status, finished (+ wandb block if eval_wandb)
+    ├── config.yaml
+    ├── launch/     env.json, git_diff.patch
+    ├── logs/       run.log, stats.jsonl
+    └── artifacts/<kind>/           (no step level inside an evaluation)
 ```
+
+- `run.json`: `status` is `running` from the start, `finished` after `finish()` / a clean `with` block and `crashed`
+  when the process ends through an exception (`finished` is the end time; a killed process stays `running`).
+  `layout_version` is the on-disk layout (2). `wandb` is `{"project", "entity", "runs": [{"id", "name", "started",
+  "resumed_from_step", "url"}, ...]}`, oldest first: one entry per start or resume, all deleted on `overwrite=True`
+  (in the stored project / entity).
+- `launch/env.json`: `created`, `command` (argv, cwd), `python`, `host`, `git` (root, commit, branch, dirty,
+  `untracked` (first 50), `diff_bytes` = full diff size, `diff_truncated`), `gpu` (names, driver, CUDA; from torch.cuda,
+  else nvidia-smi, else null), `packages` (versions of torch, numpy, jax, ... and model-sitter), `pixi` (`pixi.lock`
+  sha256 and `PIXI_ENVIRONMENT_NAME`). A part that cannot be captured is null and logs a WARNING; it never breaks the run.
+- `launch/git_diff.patch`: `git diff HEAD` including untracked files (added intent-to-add in a temporary index, so
+  your real index is never touched), cut at 1 MB. Only written when the tree is dirty. A resume keeps the original
+  and writes `launch/resume_<k>/`.
+- `logs/run.log`: everything the logger printed (also DEBUG lines). `logs/stats.jsonl`: one row per step,
+  `{"step": 3, "loss": 0.2, "val/acc": 0.9}`.
+
+### Evaluations
+
+`Sitter(run, eval_mode=True)` never writes into the run itself. Its outputs go to
+`<run>/evaluations/<eval_name>/`, created at the first `load_checkpoint` or write. `eval_name` defaults to
+`step_<N>_<YYYY-mm-ddTHH-MM-SS>` (N = the loaded checkpoint step, only the timestamp when nothing was loaded);
+an existing folder is never reused (`FileExistsError`). An evaluation has no W&B run unless `eval_wandb=True`.
+
+### Artifacts
+
+`sitter.artifact_dir("rollouts")` returns (and creates) `<run>/artifacts/step_<current step>/rollouts/` in training and
+`<evaluation>/artifacts/rollouts/` in an evaluation, for any files of your own. `add_image` / `add_plot` / `add_video` /
+`add_analysis` use it with the kinds `images`, `videos`, `analysis`. `sitter.current_step` and `sitter.loaded_step`
+are read-only.
+
+## Migrating old runs
+
+Every run records `layout_version` in `run.json` (a run without it is layout 1). Opening a run of another layout
+(`resume`, `eval_mode`, `overwrite`, `load_group_stats`) raises `LegacyLayoutError` telling you to migrate:
+
+```
+mosi migrate runs/old_run            # dry run: prints each run and every move / write / delete / keep, changes nothing
+mosi migrate runs --apply            # a folder: every run below it is migrated
+```
+
+Run folders are found as folders holding `run.json`, `checkpoint_*/` or `stats.jsonl`. Files the step does not know
+are reported `keep` and never touched. A run is refused (and left alone) when its `run.json` says `running` or its
+`run.log` changed in the last 5 minutes. The last line counts migrated / current / refused; a second run reports
+`current`. Steps are chained (`migrate_1_to_2`, ...) up to `CURRENT_LAYOUT` (one place: `mosi/layout.py`); each step is its own file in `mosi/migrations/` (`v1_to_v2.py`, ...), registered in `STEPS` in `mosi/migrations/runner.py`.
+In layout 1 -> 2, `wandb_id.txt` becomes the `wandb` block (project from `WANDB_PROJECT` at migration time) and
+`evaluation/` becomes `evaluations/legacy/`.
+
+**A change of the layout ships its migration step and its test in the same commit.**
 
 ## Checkpoints in detail
 
@@ -208,7 +259,9 @@ runs/seeds_run/test_s0/
 `load_checkpoint` accepts a step number, `"latest"`, `"best"` or a path to a checkpoint folder, and returns
 `{"step": N, ...plain values}`. A key you ask for that was not saved raises a `KeyError` naming it.
 Saves are atomic (written to a temp file, then renamed), so a crash never leaves a half-written checkpoint.
-`keep_last=N` prunes the oldest `checkpoint_*` folders; `best_model/` is never pruned.
+`keep_last=N` prunes the oldest `checkpoints/step_<N>` folders; `checkpoints/best/` is never pruned.
+Checkpoints live in `<run>/checkpoints/step_<N>/checkpoint.{pt,pkl}`, the best one in `checkpoints/best/` (with
+`best_metrics.jsonl`). Loading works on runs of the current layout only; older runs need `mosi migrate` first.
 
 Backends: `checkpoint_backend="auto"` (torch if installed, else pickle), `"torch"`, `"pickle"`, or your own
 object with `suffix`, `save(obj, path)` and `load(path, like)` (e.g. orbax / safetensors).
@@ -217,12 +270,13 @@ object with `suffix`, `save(obj, path)` and `load(path, like)` (e.g. orbax / saf
 
 | | |
 |---|---|
-| `Sitter(fpath, overwrite=False, resume=False, eval_mode=False, use_wandb=False, *, group, name, job_type, tags, notes, project, checkpoint_backend, keep_last, confirm, log_level)` | the main object, also a context manager |
+| `Sitter(fpath, overwrite=False, resume=False, eval_mode=False, use_wandb=False, *, eval_name, eval_wandb, group, run_name, job_type, tags, notes, project, checkpoint_backend, keep_last, confirm, log_level)` | the main object, also a context manager |
 | `.add_stats(**stats)`, `.step(step=None)`, `.finish()` | per-step stats |
 | `.add_config(obj=None, **values)` | `config.yaml` + W&B config |
 | `.checkpoint(metrics=None, **named)`, `.load_checkpoint(step, **named)` | checkpoints |
 | `.enable_monitor(increase_keys, decrease_keys, tolerance, patience, log_every)`, `.should_stop` | best model + early stop |
-| `.add_image / add_plot / add_video / add_analysis` | artifacts |
+| `.add_image / add_plot / add_video / add_analysis`, `.artifact_dir(kind)` | artifacts |
+| `.current_step`, `.loaded_step` | read-only: the current step, the step of the last loaded checkpoint |
 | `SitterConfig`, `Sitter.from_config(cfg)` | CLI friendly config |
 | `load_group_stats(group_dir)` | stats of every run in a group |
 | `dump_config(obj)`, `load_config(path)` | lossless YAML |

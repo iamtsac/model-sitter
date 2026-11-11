@@ -42,7 +42,7 @@ def test_failed_save_leaves_no_partial_checkpoint(tmp_path):
     log = Sitter(tmp_path / "r", checkpoint_backend=Boom())
     with pytest.raises(RuntimeError):
         log.checkpoint(model=Stateful(1))
-    assert not list((tmp_path / "r" / "checkpoint_1").glob("checkpoint.*"))
+    assert not list((tmp_path / "r" / "checkpoints" / "step_1").glob("checkpoint.*"))
 
 
 def test_load_latest_and_no_side_effects(tmp_path):
@@ -53,7 +53,7 @@ def test_load_latest_and_no_side_effects(tmp_path):
     cp = log.load_checkpoint("latest", model=m)
     assert m.v == 3 and cp["step"] == 3
     before = (log.env.fpath, log.env.work_dir, log.history.stats_file)
-    log.load_checkpoint(str(tmp_path / "r" / "checkpoint_1"), model=m)
+    log.load_checkpoint(str(tmp_path / "r" / "checkpoints" / "step_1"), model=m)
     assert (log.env.fpath, log.env.work_dir, log.history.stats_file) == before
 
 
@@ -84,7 +84,7 @@ def test_checkpoint_defaults_to_staged_stats(tmp_path):
     log = make(tmp_path)
     log.enable_monitor(decrease_keys=["val/loss"])
     log.add_stats(val={"loss": 0.5}); log.checkpoint(model=Stateful(1)); log.step()
-    assert (tmp_path / "r" / "best_model").exists()
+    assert (tmp_path / "r" / "checkpoints" / "best").exists()
 
 
 def test_monitor_log_every(tmp_path, caplog):
@@ -102,7 +102,7 @@ def test_stats_scalars_nan_and_arrays(tmp_path):
     log = make(tmp_path)
     log.add_stats(a=np.float32(1.5), b=np.array(2.0), c=float("nan"))
     log.step()
-    row = json.loads((tmp_path / "r" / "stats.jsonl").read_text())
+    row = json.loads((tmp_path / "r" / "logs" / "stats.jsonl").read_text())
     assert (row["a"], row["b"], row["c"]) == (1.5, 2.0, None)
     with pytest.raises(ValueError, match="scalar"):
         log.add_stats(vec=np.zeros(3))
@@ -111,8 +111,8 @@ def test_stats_scalars_nan_and_arrays(tmp_path):
 def test_context_manager_flushes_and_closes_log_file(tmp_path, fake_wandb):
     with make(tmp_path, use_wandb=True) as log:
         log.add_stats(loss=1.0)
-    assert (tmp_path / "r" / "stats.jsonl").exists() and fake_wandb.run is None
-    assert "Initialized Experiment" in (tmp_path / "r" / "run.log").read_text()
+    assert (tmp_path / "r" / "logs" / "stats.jsonl").exists() and fake_wandb.run is None
+    assert "Initialized Experiment" in (tmp_path / "r" / "logs" / "run.log").read_text()
 
 
 def test_log_level_quiets_console_but_not_file(tmp_path, capsys):
@@ -120,7 +120,7 @@ def test_log_level_quiets_console_but_not_file(tmp_path, capsys):
     log.logger.info("hidden on console")
     log.finish()
     assert "hidden on console" not in capsys.readouterr().out
-    assert "hidden on console" in (tmp_path / "r" / "run.log").read_text()
+    assert "hidden on console" in (tmp_path / "r" / "logs" / "run.log").read_text()
 
 
 def test_rerun_within_one_second_does_not_collide(tmp_path):

@@ -29,7 +29,7 @@ class CheckpointManager:
         is_best: bool = False,
         **modules,
     ) -> Path:
-        _path = self.fpath / f"checkpoint_{step}"
+        _path = self.fpath / "checkpoints" / f"step_{step}"
         _path.mkdir(parents=True, exist_ok=True)
 
         cp = dict(step=step)
@@ -41,10 +41,10 @@ class CheckpointManager:
 
         ckpt_file = f"checkpoint.{self.backend.suffix}"
         self._atomic(lambda tmp: self.backend.save(cp, tmp), _path / ckpt_file)
-        self.logger.debug(f"Checkpoint saved: checkpoint_{step}")
+        self.logger.debug(f"Checkpoint saved: checkpoints/step_{step}")
 
         if is_best:
-            best_dir = self.fpath / "best_model"
+            best_dir = self.fpath / "checkpoints" / "best"
             best_dir.mkdir(parents=True, exist_ok=True)
             for old in best_dir.glob("checkpoint.*"):
                 if old.name != ckpt_file: old.unlink()
@@ -68,15 +68,15 @@ class CheckpointManager:
             tmp.unlink(missing_ok=True)
 
     def _prune(self) -> None:
-        """Deletes the oldest `checkpoint_N` folders beyond `keep_last`; `best_model/` is never touched."""
+        """Deletes the oldest `checkpoints/step_<N>` folders beyond `keep_last`; `checkpoints/best/` is never touched."""
         if self.keep_last is None:
             return
         for _, old in self._saved_steps()[:-self.keep_last]:
             shutil.rmtree(old)
 
     def _saved_steps(self):
-        """`[(step, folder)]` of the `checkpoint_<N>` folders, oldest first."""
-        return sorted((int(p.name.split("_")[-1]), p) for p in self.fpath.glob("checkpoint_*")
+        """`[(step, folder)]` of the `checkpoints/step_<N>` folders, oldest first."""
+        return sorted((int(p.name.split("_")[-1]), p) for p in (self.fpath / "checkpoints").glob("step_*")
                       if p.is_dir() and p.name.split("_")[-1].isdigit())
 
     def load(self, step: Union[int, str], **modules) -> Tuple[dict, Path]:
@@ -84,11 +84,11 @@ class CheckpointManager:
             if step.lower() == "latest":
                 steps = self._saved_steps()
                 if not steps:
-                    raise FileNotFoundError(f"No checkpoint_<N> folders in {self.fpath}")
+                    raise FileNotFoundError(f"No checkpoints/step_<N> folders in {self.fpath}")
                 ckpt_folder = steps[-1][1].absolute()
                 self.logger.info(f"Loading the latest checkpoint ({ckpt_folder.name})...")
             elif step.lower() == "best":
-                ckpt_folder = self.fpath.absolute() / "best_model"
+                ckpt_folder = self.fpath.absolute() / "checkpoints" / "best"
                 if not ckpt_folder.exists():
                     self.logger.error(f"No best checkpoint found at {ckpt_folder}")
                     raise FileNotFoundError("Best checkpoint missing.")
@@ -99,9 +99,9 @@ class CheckpointManager:
                     ckpt_folder = potential_path
                     self.logger.info(f"Loading checkpoint from explicit path {ckpt_folder}")
                 else:
-                    ckpt_folder = self.fpath.absolute() / f"checkpoint_{step}"
+                    ckpt_folder = self.fpath.absolute() / "checkpoints" / f"step_{step}"
         else:
-            ckpt_folder = self.fpath.absolute() / f"checkpoint_{step}"
+            ckpt_folder = self.fpath.absolute() / "checkpoints" / f"step_{step}"
 
         checkpoint = self._restore(ckpt_folder, modules)
         return checkpoint, ckpt_folder

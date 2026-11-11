@@ -26,6 +26,9 @@ dependencies = [
     "pyyaml",
 ]
 
+[project.scripts]
+mosi = "mosi.migrations.cli:main"
+
 # [project.urls]
 # Homepage = "https://github.com/iamtsac/model-sitter"
 # Issues = "https://github.com/iamtsac/model-sitter/issues"

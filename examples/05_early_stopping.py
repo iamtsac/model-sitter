@@ -1,4 +1,4 @@
-"""The monitor tracks the best model (best_model/) and tells your loop when to stop."""
+"""The monitor tracks the best model (checkpoints/best/) and tells your loop when to stop."""
 from mosi import Sitter
 
 class Model:

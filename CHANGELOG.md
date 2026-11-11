@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- Run layout 2 (`layout_version` in `run.json`): `launch/` (env.json, git_diff.patch, resume_<k>/), `logs/` (run.log, stats.jsonl, wandb/), `checkpoints/step_<N>/` + `checkpoints/best/`, `artifacts/step_<N>/<kind>/`, `evaluations/<eval_name>/`. `wandb_id.txt` is replaced by the `wandb` block of `run.json` (project, entity, one entry per W&B run). `run.json` is written for every run and carries `status` (running / finished / crashed).
+- Evaluations are nested (`eval_name`, default `step_<N>_<timestamp>`, never overwritten), write `launch/` and `logs/run.log`, and create no W&B run unless `eval_wandb=True`.
+- New `Sitter.artifact_dir(kind)`, `.current_step`, `.loaded_step`.
+- Provenance: `git_diff.patch` includes untracked files, `env.json` records `git.diff_truncated` / `diff_bytes`, GPU, package versions and the pixi lock; failures log a WARNING.
+- New `mosi migrate <path> [--apply]` (versioned steps, dry run by default). Runs of the old layout now raise `LegacyLayoutError` until migrated.
 - Renamed the run's `name` to `run_name`: `Sitter(run_name=...)`, `SitterConfig.run_name` (CLI `--logger.run-name`), `Sitter.run_name` and `resolve_run_dir(..., run_name)`. `name=` is no longer accepted. The `name` key in `run.json` is unchanged.
 - Renamed `ModelLogger` to `Sitter` and `LoggerConfig` to `SitterConfig` (both in `mosi.sitter`). The old names remain as deprecated aliases. On-disk run format is unchanged.
 

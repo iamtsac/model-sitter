@@ -1,13 +1,17 @@
 import os
 import re
+import datetime
 import logging
 from pathlib import Path
 from typing import Optional, List, Dict, Union, Any, Sequence
 
+from .groups import read_info, update_info
+
 class WandbManager:
     def __init__(
         self,
-        fpath: Path,
+        info_path: Path,
+        wandb_dir: Path,
         overwrite: bool,
         resume: bool,
         logger: logging.Logger,
@@ -18,19 +22,20 @@ class WandbManager:
         job_type: Optional[str] = None,
         tags: Sequence[str] = (),
         notes: Optional[str] = None,
-        id_prefix: Optional[str] = None,
+        id_prefix: str,
     ):
         try:
             import wandb
         except ImportError as e:
             raise ImportError("WandB logging needs wandb: pip install 'model-sitter[wandb]'") from e
         self.wandb = wandb
-        self.fpath = fpath
+        self.info_path = info_path  # run.json (training) or eval.json (evaluation): holds the W&B ids
+        self.wandb_dir = wandb_dir
         self.logger = logger
         self.defined_metrics = set()
         self.run = None
         self._meta = dict(project=project, group=group, run_name=run_name, job_type=job_type,
-                          tags=list(tags) or None, notes=notes, id_prefix=id_prefix or fpath.name)
+                          tags=list(tags) or None, notes=notes, id_prefix=id_prefix)
 
         self._init_run(overwrite, resume)
 
@@ -45,38 +50,46 @@ class WandbManager:
         project = m["project"] or os.environ.get("WANDB_PROJECT")
         assert project is not None, "Pass project= or set the WANDB_PROJECT env variable"
 
-        id_file = self.fpath / "wandb_id.txt"
-        lineage_ids = [line.strip() for line in id_file.read_text().split('\n') if line.strip()] if id_file.exists() else []
+        block = read_info(self.info_path).get("wandb") or {}
+        lineage = list(block.get("runs") or [])
 
-        # Only this run's own lineage is deleted, siblings in the same group are never touched.
-        if overwrite and lineage_ids:
-            self._delete_cloud_lineage(project, lineage_ids)
-            lineage_ids = []
+        # Only this run's own lineage is deleted (in the project/entity stored with it, not the current
+        # ones), siblings in the same group are never touched.
+        if overwrite and lineage:
+            self._delete_cloud_lineage(block.get("project") or project, block.get("entity"), [r["id"] for r in lineage])
+            lineage = []
 
         # A fresh id every time, resumes included: W&B refuses to reuse the id of a deleted run, and a
         # resumed run branches (history up to the checkpoint is replayed) so it never collides with
-        # steps the server already holds past the checkpoint. `wandb_id.txt` keeps the whole lineage.
+        # steps the server already holds past the checkpoint. The `wandb` block of the info file keeps the whole
+        # lineage (`runs`, oldest first).
         run_id = f"{self._safe_id(m['id_prefix'])}_{generate_id()}"
 
-        keep_lineage = resume and not overwrite and bool(lineage_ids)
-        with open(id_file, "a" if keep_lineage else "w") as f:
-            f.write(f"\n{run_id}" if keep_lineage else run_id)
+        keep_lineage = resume and not overwrite and bool(lineage)
 
         self._base_name = m["run_name"] or os.environ.get("WANDB_RUN") or run_id
         self.run = self.wandb.init(
-            project=project, id=run_id, dir=str(self.fpath),
+            project=project, id=run_id, dir=str(self.wandb_dir),
             name=self._base_name,
             group=m["group"], job_type=m["job_type"], tags=m["tags"], notes=m["notes"],
             settings=self.wandb.Settings(_disable_stats=True, _disable_meta=True)
         )
         self.run.define_metric("step", hidden=True)
+        entry = {"id": run_id, "name": self._base_name,
+                 "started": datetime.datetime.now().isoformat(timespec="seconds"),
+                 "resumed_from_step": None, "url": getattr(self.run, "url", None)}
+        entity = getattr(self.run, "entity", None)
+        if keep_lineage:  # the lineage keeps the project / entity it was started in
+            project, entity = block.get("project") or project, block.get("entity") or entity
+        update_info(self.info_path, wandb={"project": project, "entity": entity,
+                                           "runs": (lineage if keep_lineage else []) + [entry]})
 
-    def _delete_cloud_lineage(self, project: str, lineage_ids: List[str]):
+    def _delete_cloud_lineage(self, project: str, entity: Optional[str], lineage_ids: List[str]):
         self.logger.info(f"🗑️ Deleting {len(lineage_ids)} old WandB run(s)...")
         api = self.wandb.Api()
         for old_id in lineage_ids:
             try:
-                api.run(f"{project}/{old_id}").delete()
+                api.run(f"{entity + '/' if entity else ''}{project}/{old_id}").delete()
             except Exception as e:
                 self.logger.warning(f"Could not delete {old_id}: {e}")
 
@@ -106,6 +119,10 @@ class WandbManager:
 
         new_name = f"{self._base_name}_resume_from_step_{step}"
         self.run.name = new_name
+        block = read_info(self.info_path).get("wandb")
+        if block and block.get("runs"):
+            block["runs"][-1].update(name=new_name, resumed_from_step=step)
+            update_info(self.info_path, wandb=block)
         self.run.tags = tuple(self.run.tags or ()) + ("resumed",)
 
         if getattr(getattr(self.run, "settings", None), "mode", "online") != "online":

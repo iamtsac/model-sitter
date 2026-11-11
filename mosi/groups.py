@@ -4,7 +4,7 @@ import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-RUN_INFO = "run.json"
+from .layout import CURRENT_LAYOUT, RUN_INFO, LegacyLayoutError
 
 
 def resolve_run_dir(fpath: Union[str, Path], group: Optional[str], run_name: Optional[str]) -> Path:
@@ -20,16 +20,36 @@ def resolve_run_dir(fpath: Union[str, Path], group: Optional[str], run_name: Opt
     return fpath / group / run_name
 
 
-def write_run_info(run_dir: Path, group: str, run: str, **info: Any) -> None:
-    """Marks `run_dir` as a member of `group` via its own `run.json`.
+def write_run_info(run_dir: Path, group: Optional[str], run: str, **info: Any) -> None:
+    """Creates (or updates) the run's own `run.json`; `group` is None for an ungrouped run.
 
     Each run only ever writes its own file, so runs of a group can start in parallel without racing
-    on a shared manifest."""
+    on a shared manifest. `info` entries that are None are left as they are."""
     run_dir.mkdir(parents=True, exist_ok=True)
     path = run_dir / RUN_INFO
-    data = json.loads(path.read_text()) if path.exists() else {
-        "group": group, "name": run, "created": datetime.datetime.now().isoformat(timespec="seconds")}
+    if path.exists():
+        data = json.loads(path.read_text())
+    else:
+        data = {"group": group, "name": run, "created": datetime.datetime.now().isoformat(timespec="seconds"),
+                "job_type": None, "tags": None, "wandb": None, "status": "running", "finished": None,
+                "layout_version": CURRENT_LAYOUT}
     data.update({k: v for k, v in info.items() if v is not None})
+    _write_json(path, data)
+
+
+def read_info(path: Path) -> dict:
+    """Contents of a `run.json` / `eval.json`, `{}` if it does not exist."""
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def update_info(path: Path, **values: Any) -> None:
+    """Sets `values` (None included) in `path`, atomically."""
+    data = read_info(path)
+    data.update(values)
+    _write_json(path, data)
+
+
+def _write_json(path: Path, data: dict) -> None:
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2))
     tmp.replace(path)
@@ -57,7 +77,9 @@ def load_group_stats(group_dir: Union[str, Path]) -> Dict[str, List[dict]]:
     if not runs:
         raise FileNotFoundError(f"{group_dir} is not a group directory (no run folders with {RUN_INFO})")
     out: Dict[str, List[dict]] = {}
-    for run in runs:
-        stats = group_dir / run / "stats.jsonl"
+    for run, info in runs.items():
+        if info.get("layout_version", 1) != CURRENT_LAYOUT:
+            raise LegacyLayoutError(f"{group_dir / run} uses an old run layout. Convert it first: mosi migrate {group_dir} --apply")
+        stats = group_dir / run / "logs" / "stats.jsonl"
         out[run] = [json.loads(l) for l in stats.read_text().splitlines() if l.strip()] if stats.exists() else []
     return out

@@ -1,4 +1,4 @@
-"""Images, plots, videos and tables land in images/, videos/ and analysis/ (one step_<N> folder each)."""
+"""Images, plots, videos and tables land in artifacts/step_<N>/{images,videos,analysis}/; artifact_dir(kind) gives your own."""
 import numpy as np
 from PIL import Image
 from mosi import Sitter

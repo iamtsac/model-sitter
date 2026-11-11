@@ -19,9 +19,9 @@ def test_keep_last_prunes_old_but_keeps_best(tmp_path):
     log.enable_monitor(decrease_keys=["loss"])
     for loss in (1.0, 5.0, 6.0, 7.0, 8.0):
         log.checkpoint(metrics={"loss": loss}, model=Stateful(1)); log.step()
-    left = sorted(p.name for p in (tmp_path / "r").glob("checkpoint_*"))
-    assert left == ["checkpoint_4", "checkpoint_5"]
-    assert (tmp_path / "r" / "best_model" / "checkpoint.pkl").exists()
+    left = sorted(p.name for p in (tmp_path / "r" / "checkpoints").glob("step_*"))
+    assert left == ["step_4", "step_5"]
+    assert (tmp_path / "r" / "checkpoints" / "best" / "checkpoint.pkl").exists()
 
 
 def test_keep_last_validation(tmp_path):
@@ -36,16 +36,16 @@ def test_artifacts_split_into_folders(tmp_path):
     log.add_video("v", str(tmp_path / "none.mp4"))  # missing file: logged as error, no crash
     log.add_analysis("w", {"i": [1, 2], "w": [0.1, 0.2]})
     r = tmp_path / "r"
-    assert (r / "images" / "step_7" / "a.png").exists()
-    assert (r / "analysis" / "step_7" / "w.csv").read_text().splitlines()[0] == "i,w"
-    assert not (r / "checkpoint_7").exists()  # artifacts no longer live inside checkpoint folders
+    assert (r / "artifacts" / "step_7" / "images" / "a.png").exists()
+    assert (r / "artifacts" / "step_7" / "analysis" / "w.csv").read_text().splitlines()[0] == "i,w"
+    assert not (r / "checkpoints" / "step_7").exists()  # artifacts no longer live inside checkpoint folders
 
 
 def test_eval_mode_artifacts_stay_in_evaluation_dir(tmp_path):
     Sitter(tmp_path / "r").finish()
-    log = Sitter(tmp_path / "r", eval_mode=True)
+    log = Sitter(tmp_path / "r", eval_mode=True, eval_name="e")
     log.add_image("a.png", Img())
-    assert (tmp_path / "r" / "evaluation" / "images" / "step_1" / "a.png").exists()
+    assert (tmp_path / "r" / "evaluations" / "e" / "artifacts" / "images" / "a.png").exists()
 
 
 def test_monitor_is_quiet_without_improvement(tmp_path, caplog):
